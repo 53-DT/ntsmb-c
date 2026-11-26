@@ -1347,7 +1347,7 @@ fn root_form(inputs: &RootInputs) -> Form<RootId, Action, SettingsPage> {
     let connections = FormSection::new("Connections")
         .item(
             RootId::SwitchProfile,
-            RowKind::Button,
+            RowKind::<SettingsPage>::Button,
             Action::SwitchProfile,
             Row::new("Switch connection").chevron(true),
         );
