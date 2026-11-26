@@ -1,0 +1,20 @@
+{
+  "id": "io.github.tiper.finnative",
+  "version": "0.2.0",
+  "vendor": "NT-SMB Project",
+  "type": "native",
+  "main": "plxnative",
+  "title": "NT-SMB",
+  "appDescription": "Native SMB file browser and video player for LG webOS TVs. Browse network folders and play videos directly without Plex or Jellyfin.",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "iconColor": "#060606",
+  "nativeLifeCycleInterfaceVersion": 2,
+  "handlesRelaunch": false,
+  "transparent": true,
+  "requiredMemory": 160,
+  "requiredPermissions": [
+    "database.operation",
+    "securitykey.operation"
+  ]
+}

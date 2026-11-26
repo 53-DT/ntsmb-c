@@ -1,0 +1,1117 @@
+//! Root-page mounting, Automatically Sign In toggling, BACK/focus restore, and the surface's
+//! own logical-state hash across its inner stack.
+
+use super::*;
+#[allow(unused_imports)]
+use super::test_support::*;
+use plx_ui::form::Activation;
+use plx_machine::machine::{Edge, InputEvent, InputKind, Source};
+use plx_machine::present::Present;
+use plx_ui::screen::By;
+
+/// Mounting the surface at its `Root` page runs the inner stack's own lifecycle (§3.4) and
+/// names the root — the heartbeat's `overlay=` before anything has been pressed.
+#[test]
+fn mounting_the_surface_names_its_root_page() {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("surface-mount");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    assert_eq!(name(&s), word::SETTINGS);
+    assert_eq!(s.inner.depth(), 1);
+    assert_eq!(s.kind, Family::Settings);
+}
+
+#[test]
+fn signed_out_root_does_not_offer_automatically_sign_in() {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("root-signed-out-auto");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    // Playback / Language / Privacy / Legal / About — About is a door, not a switch.
+    let about = FocusKey {
+        entry: EntryId(0),
+        elem: root_key(RootId::About),
+    };
+    step(
+        &mut s,
+        ScreenEvent::FocusMoved {
+            from: None,
+            to: about,
+            by: By::Dir,
+        },
+        Some(about),
+    );
+    step(&mut s, ScreenEvent::Activate(about.elem), Some(about));
+    assert_eq!(
+        s.inner.depth(),
+        2,
+        "signed out, About is a document push"
+    );
+    assert_eq!(name(&s), word::LEGAL);
+    assert!(!plx_plex::plex::session::peek().auto_sign_in());
+}
+
+#[test]
+fn a_multi_user_root_toggles_automatically_sign_in_in_place() {
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-auto-toggle");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    let row = FocusKey {
+        entry: EntryId(0),
+        elem: root_key(RootId::AutoSignIn),
+    };
+    step(
+        &mut s,
+        ScreenEvent::FocusMoved {
+            from: None,
+            to: row,
+            by: By::Dir,
+        },
+        Some(row),
+    );
+    let out = step(&mut s, ScreenEvent::Activate(row.elem), Some(row));
+    execute_storage_effects(&out);
+    plx_base::storage_worker::drain_for_test();
+    assert_eq!(
+        name(&s),
+        word::SETTINGS,
+        "OK on the switch must not push a page"
+    );
+    assert_eq!(s.inner.depth(), 1);
+    assert!(
+        plx_plex::plex::session::peek().auto_sign_in(),
+        "the queued switch is durable after the worker completes"
+    );
+    let out = step(&mut s, ScreenEvent::Activate(row.elem), Some(row));
+    execute_storage_effects(&out);
+    plx_base::storage_worker::drain_for_test();
+    assert!(!plx_plex::plex::session::peek().auto_sign_in());
+    assert_eq!(s.inner.depth(), 1);
+}
+
+#[test]
+fn right_on_automatically_sign_in_does_not_push() {
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-auto-right");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    let row = FocusKey {
+        entry: EntryId(0),
+        elem: root_key(RootId::AutoSignIn),
+    };
+    step(
+        &mut s,
+        ScreenEvent::FocusMoved {
+            from: None,
+            to: row,
+            by: By::Dir,
+        },
+        Some(row),
+    );
+    let right: ScreenEvent<InnerHost> = ScreenEvent::Input(InputEvent {
+        at: Tick::default(),
+        source: Source::Sdl,
+        kind: InputKind::Key {
+            key: Key::Right,
+            sym: 0,
+            wcode: 0,
+            edge: Edge::Down,
+            at_edge: true,
+        },
+    });
+    let _ = step(&mut s, right, Some(row));
+    assert_eq!(s.inner.depth(), 1, "RIGHT on a switch is not rule 8");
+    assert!(!plx_plex::plex::session::peek().auto_sign_in());
+    assert_eq!(name(&s), word::SETTINGS);
+}
+
+/// **BACK at the surface's own root does not touch the inner stack, and it is not swallowed
+/// either** — `Handled::No` is exactly what tells the CONTAINER (the outer `ModalStack`) it
+/// may dismiss the surface. `bridge.rs`'s own test asserts the CONSEQUENCE of this one level
+/// up (the surface's phase goes to `Closing`); this is the return value that consequence is
+/// built on.
+#[test]
+fn back_at_the_surface_s_own_root_is_not_handled() {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("surface-back-root");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    let back: ScreenEvent<InnerHost> = ScreenEvent::Input(InputEvent {
+        at: Tick::default(),
+        source: Source::Sdl,
+        kind: InputKind::Key {
+            key: Key::Back,
+            sym: 0,
+            wcode: 0,
+            edge: Edge::Down,
+            at_edge: false,
+        },
+    });
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    let mut fx = Effects::new(&mut out, MachineId::Instance(InstanceId(0)), &mut present);
+    let handled = <RouteSurface as Machine<InnerHost>>::step(&mut s, &back, &cx(None), &mut fx);
+    assert_eq!(
+        handled,
+        Handled::No,
+        "the surface's own stack has nothing to pop at depth 1"
+    );
+    assert_eq!(
+        s.inner.depth(),
+        1,
+        "…and nothing about the stack moved while deciding that"
+    );
+}
+
+/// **The remembered-focus round trip (spec §7.3 step 4).** Signed out, the root's rows are
+/// Video & playback / Language / Privacy & data / Legal notices / About PlxNative (signed out
+/// there is no Favourites row), so row 3 is Legal notices. The engine seats
+/// focus there, OK pushes the index, and a BACK must hand focus back to THAT row — not row 0
+/// — which is the one thing `bridge.rs`'s word-only assertions cannot see from outside `app/`.
+#[test]
+fn a_pop_from_legal_restores_focus_to_the_row_that_opened_it() {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("surface-pop-focus");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+
+    let legal_row = FocusKey {
+        entry: EntryId(0),
+        elem: root_key(RootId::Legal),
+    };
+    step(
+        &mut s,
+        ScreenEvent::FocusMoved {
+            from: None,
+            to: legal_row,
+            by: By::Dir,
+        },
+        Some(legal_row),
+    );
+    step(
+        &mut s,
+        ScreenEvent::Activate(legal_row.elem),
+        Some(legal_row),
+    );
+    assert_eq!(
+        name(&s),
+        word::LEGAL,
+        "OK on Legal notices pushed the index"
+    );
+    assert_eq!(s.inner.depth(), 2);
+
+    let back: ScreenEvent<InnerHost> = ScreenEvent::Input(InputEvent {
+        at: Tick::default(),
+        source: Source::Sdl,
+        kind: InputKind::Key {
+            key: Key::Back,
+            sym: 0,
+            wcode: 0,
+            edge: Edge::Down,
+            at_edge: false,
+        },
+    });
+    let out = step(&mut s, back, None);
+    assert_eq!(
+        name(&s),
+        word::SETTINGS,
+        "BACK popped the inner stack, not the surface"
+    );
+    assert_eq!(s.inner.depth(), 1);
+
+    let reseat = out.iter().find_map(|st| match &st.fx {
+        Fx::Deliver(
+            _,
+            Delivery::Screen(ScreenEvent::Enter(Enter::Fresh {
+                focus: FocusTarget::Elem(k),
+            })),
+        ) => Some(*k),
+        _ => None,
+    });
+    assert_eq!(
+        reseat,
+        Some(legal_row),
+        "BACK from Legal must ask the engine to re-seat the row that opened it, not the first row"
+    );
+}
+
+/// The complementary case: a PUSH always asks for a fresh seat on the new page's own first
+/// group, never the remembered list — a remembered entry belongs to the page being LEFT, and
+/// reusing it for the page being ENTERED would seat the Legal index on whatever numeric row
+/// happened to be focused on the root.
+///
+/// **Asserting the emitted REQUEST used to be the whole test, and that was never enough.** Every
+/// page in this family shares the surface's outer `EntryId` and `GroupId(0)`, so
+/// `FocusTarget::ContainerGroup(GroupId(0))` and the fixed `FocusTarget::FirstInGroup(GroupId(0))`
+/// below are requests for the exact same group — the difference is invisible at this level and
+/// only shows up one step later, inside `FocusEngine::enter`, where `ContainerGroup` resolves
+/// through the group's `Seat::Remembered` policy and reads the OUTGOING page's row back for the
+/// page being entered (`ui/focus.rs`'s `seat_in`). A version of this test that stopped at the
+/// emitted effect would have kept passing on the old, buggy `ContainerGroup` request forever,
+/// because the request LOOKED right; it just fed a policy that made it wrong two steps later. So
+/// this asserts the new target by name, not merely "some fresh focus target came out".
+#[test]
+fn a_push_seats_the_new_page_fresh_rather_than_from_the_remembered_list() {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("surface-push-seat");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    let root_row = FocusKey {
+        entry: EntryId(0),
+        elem: root_key(RootId::Legal),
+    };
+    step(
+        &mut s,
+        ScreenEvent::FocusMoved {
+            from: None,
+            to: root_row,
+            by: By::Dir,
+        },
+        Some(root_row),
+    );
+    let out = step(&mut s, ScreenEvent::Activate(root_row.elem), Some(root_row));
+    let seat = out.iter().find_map(|st| match &st.fx {
+        Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(Enter::Fresh { focus }))) => {
+            Some(*focus)
+        }
+        _ => None,
+    });
+    assert!(
+        matches!(seat, Some(FocusTarget::FirstInGroup(GroupId(0)))),
+        "a push seats the destination's own group 0 FIRST-in-group, ignoring any remembered \
+         cursor for it (not `ContainerGroup`, whose `Seat::Remembered` would read the outgoing \
+         page's row back): {seat:?}"
+    );
+}
+
+/// **`remembered` must not grow for the whole life of a Settings session.** Every push and
+/// every pop records one entry; without the retire-time cleanup in `request`, opening and
+/// closing Legal a few times would leave stale rows behind for entries the container has
+/// already dropped for good, because a popped page's `EntryId` is never minted again.
+#[test]
+fn remembered_does_not_grow_across_repeated_visits_to_the_same_page() {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("surface-remembered");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    let legal_row = FocusKey {
+        entry: EntryId(0),
+        elem: root_key(RootId::Legal),
+    };
+    for _ in 0..5 {
+        step(
+            &mut s,
+            ScreenEvent::FocusMoved {
+                from: None,
+                to: legal_row,
+                by: By::Dir,
+            },
+            Some(legal_row),
+        );
+        step(
+            &mut s,
+            ScreenEvent::Activate(legal_row.elem),
+            Some(legal_row),
+        );
+        assert_eq!(name(&s), word::LEGAL);
+        let back: ScreenEvent<InnerHost> = ScreenEvent::Input(InputEvent {
+            at: Tick::default(),
+            source: Source::Sdl,
+            kind: InputKind::Key {
+                key: Key::Back,
+                sym: 0,
+                wcode: 0,
+                edge: Edge::Down,
+                at_edge: false,
+            },
+        });
+        step(&mut s, back, None);
+        assert_eq!(name(&s), word::SETTINGS);
+    }
+    assert!(
+        s.remembered.len() <= 1,
+        "five open/close cycles through the same page left {} remembered entries, want at most the live root",
+        s.remembered.len()
+    );
+}
+
+/// **A pop that has finished leaves the surface AT REST at depth two — which is the state the
+/// draw used to get wrong.** Settings root → Legal notices → a legal document → BACK: the
+/// reverse push runs 1 → 0, and once it lands the ONE page on screen is the top, the Legal
+/// index. `draw` decided that case as "there is no page below me", which is only the same
+/// question at depth 1 — so with the Settings root still under the index it took the PARENT
+/// branch instead and drew the root at full strength while the index the user had just
+/// returned to was never drawn at all, hit map included.
+///
+/// The assertion is on `at_rest()` because `draw` cannot be reached from a host test: it
+/// paints, and painting measures text through SDL2_ttf, which this build does not link. This
+/// is the predicate the branch is now keyed on, and the one that used to have no equivalent.
+#[test]
+fn a_settled_pop_leaves_the_surface_at_rest_at_depth_two() {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("surface-at-rest");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    assert!(
+        s.at_rest(),
+        "a freshly mounted surface has no push in flight"
+    );
+
+    // root → Legal notices → About-style document: two pushes, so the pop below lands on a
+    // stack that still has something UNDER its top
+    let legal_row = FocusKey {
+        entry: EntryId(0),
+        elem: root_key(RootId::Legal),
+    };
+    step(
+        &mut s,
+        ScreenEvent::FocusMoved {
+            from: None,
+            to: legal_row,
+            by: By::Dir,
+        },
+        Some(legal_row),
+    );
+    step(
+        &mut s,
+        ScreenEvent::Activate(legal_row.elem),
+        Some(legal_row),
+    );
+    assert!(
+        !s.at_rest(),
+        "the push is in flight the frame it is requested"
+    );
+    settle(&mut s);
+    let doc_row = FocusKey {
+        entry: EntryId(0),
+        elem: 0,
+    };
+    step(
+        &mut s,
+        ScreenEvent::FocusMoved {
+            from: None,
+            to: doc_row,
+            by: By::Dir,
+        },
+        Some(doc_row),
+    );
+    step(&mut s, ScreenEvent::Activate(doc_row.elem), Some(doc_row));
+    settle(&mut s);
+    assert_eq!(
+        s.inner.depth(),
+        3,
+        "root → Legal index → one Legal document"
+    );
+
+    let back: ScreenEvent<InnerHost> = ScreenEvent::Input(InputEvent {
+        at: Tick::default(),
+        source: Source::Sdl,
+        kind: InputKind::Key {
+            key: Key::Back,
+            sym: 0,
+            wcode: 0,
+            edge: Edge::Down,
+            at_edge: false,
+        },
+    });
+    step(&mut s, back, None);
+    assert_eq!(s.inner.depth(), 2, "BACK popped the document");
+    assert!(!s.at_rest(), "…and the reverse push is carrying it out");
+    settle(&mut s);
+    assert!(
+        s.at_rest(),
+        "with the spring settled and nothing leaving, the Legal index is the only page on \
+         screen — even though `below()` still answers the Settings root"
+    );
+    assert!(
+        s.push.leaving.is_none(),
+        "the outgoing body is released when the spring lands"
+    );
+}
+
+/// **The surface's logical state covers its inner stack — the whole reason phase 5b re-pinned
+/// `state_fp` and invalidated every committed replay fixture.** `Dispatcher::state_hash` folds
+/// in exactly `screen.state().hash()` per surface, so with the ceremony alone in there (which
+/// is what `SurfaceState` wrote until 2026-09-07) every press anywhere inside Settings,
+/// Privacy, Legal and first-run Favourites hashed identically and a replay could never report
+/// `DIVERGED`.
+///
+/// **What this test grades is the STACK half and nothing else, and the distinction is the one
+/// the old wording lost.** It opens a page and watches the hash move, which proves the fold
+/// reaches the bodies at all. It says nothing whatever about whether a given body's own
+/// `state()` writes enough to tell two of ITS frames apart — the sentence here used to add
+/// that the finer half "rides in through each body's own `state().hash()`", which is a
+/// mechanism dressed as a guarantee, and a verifier refuted it by scrolling a Legal document
+/// with the hash standing still. That half is each page's test to write, in each page's own
+/// file; the `LogicalState` impl above carries the census of who currently does.
+#[test]
+fn the_logical_state_follows_the_inner_stack() {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("surface-state-hash");
+    let mut s = RouteSurface::new(
+        EntryId(0),
+        InstanceId(0),
+        Family::Settings,
+        SettingsPage::Root
+    );
+    step(&mut s, ScreenEvent::Mount, None);
+    let at_root = <RouteSurface as Screen<InnerHost>>::state(&s).hash();
+
+    let legal_row = FocusKey {
+        entry: EntryId(0),
+        elem: root_key(RootId::Legal),
+    };
+    step(
+        &mut s,
+        ScreenEvent::FocusMoved {
+            from: None,
+            to: legal_row,
+            by: By::Dir,
+        },
+        Some(legal_row),
+    );
+    step(
+        &mut s,
+        ScreenEvent::Activate(legal_row.elem),
+        Some(legal_row),
+    );
+    let at_legal = <RouteSurface as Screen<InnerHost>>::state(&s).hash();
+    assert_ne!(
+        at_root, at_legal,
+        "pushing the Legal index must move the surface's logical state, or a replay grades \
+         every press inside the family as identical"
+    );
+
+    let mut probe = String::new();
+    <RouteSurface as Screen<InnerHost>>::state(&s).probe(&mut probe);
+    assert!(
+        probe.starts_with("settings/root:") && probe.contains("/legal:"),
+        "the probe names the path the surface is standing on, got {probe:?}"
+    );
+}
+
+#[test]
+fn session_refresh_rebuilds_root_without_navigation() {
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-session-refresh");
+    let saved = plx_plex::plex::session::peek();
+    plx_plex::plex::session::install_transient_for_test(true);
+    let mut root = RootPage::new(EntryId(0), cx(None).views.directory, &crate::registry::capture_fixture());
+    assert!(!root.form.index_of(&RootId::AutoSignIn).is_some());
+    plx_plex::plex::session::save(&saved.with_auto_sign_in(true));
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    let mut fx = Effects::new(&mut out, MachineId::Session, &mut present);
+    root.step(&ScreenEvent::Tick(Tick::default()), &cx(None), &mut fx);
+    assert!(root.state.auto_sign_in, "a landed session must rebuild cached toggle values");
+    assert!(root.form.index_of(&RootId::AutoSignIn).is_some(),
+        "a landed roster must restore the multi-user row");
+}
+
+#[test]
+fn session_refresh_keeps_optimistic_setting_through_transient_completion() {
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-pending-refresh");
+    let saved = plx_plex::plex::session::peek();
+    let mut root = RootPage::new(EntryId(0), cx(None).views.directory, &crate::registry::capture_fixture());
+    let (reply, ticket) = std::sync::mpsc::channel();
+    reply.send(false).unwrap();
+    plx_base::storage_worker::drain_for_test();
+    root.pending_auto = Some((true, ticket));
+    root.rebuild(cx(None).views.directory);
+    plx_plex::plex::session::install_transient_for_test(false);
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    let mut fx = Effects::new(&mut out, MachineId::Session, &mut present);
+    root.step(&ScreenEvent::Tick(Tick::default()), &cx(None), &mut fx);
+    assert!(root.state.auto_sign_in, "transient completion must not erase the optimistic value");
+    assert!(root.form.index_of(&RootId::AutoSignIn).is_some(),
+        "transient storage must not remove the pending toggle");
+    plx_plex::plex::session::save(&saved);
+    root.step(&ScreenEvent::Tick(Tick::default()), &cx(None), &mut fx);
+    assert!(!root.state.auto_sign_in, "settled authority resolves the refused write");
+    assert!(root.pending_auto.is_none());
+}
+
+/// **Unencrypted connections, in Settings** (PLX-NATIVE-10): a server the person allowed shows a
+/// switch, its detail stating what it means and that a grant carries it now; turning the switch
+/// off withdraws the grant AT ONCE — before the preferences write lands — and records the
+/// revocation, so the next discovery keeps the server tokenless.
+#[test]
+fn the_unencrypted_connection_switch_shows_the_grant_and_revokes_it_at_once() {
+    use plx_plex::plex::session::PlaintextChoice;
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-plaintext-switch");
+    plx_plex::plex::reset_servers_for_test();
+    plx_plex::plex::grant::reset_for_test();
+    let account = plx_plex::plex::grant::account_key(&plx_plex::plex::session::peek().account_token);
+    assert!(!account.is_empty(), "the fixture session is signed in");
+    let mut saved = plx_plex::plex::session::peek().with_plaintext_choice(&account, "lan-machine", PlaintextChoice::Allowed);
+    saved.sources.push(plx_plex::plex::session::SourceRef {
+        machine_id: "lan-machine".into(),
+        name: "Basement".into(),
+        ..Default::default()
+    });
+    plx_plex::plex::session::save(&saved);
+    let lan = plx_plex::plex::Origin::http("192.168.0.10", 32400);
+    plx_plex::plex::grant::mint(plx_plex::plex::grant::scope(), "lan-machine", &lan,
+        &plx_plex::plex::grant::eligible_evidence_for_test()).unwrap();
+
+    let mut root = RootPage::new(EntryId(0), cx(None).views.directory, &crate::registry::capture_fixture());
+    let row = root.form.index_of(&RootId::Plaintext(ServerMachineId("lan-machine".into())))
+        .expect("an allowed server has its switch");
+    let drawn = root.form.table.sections.iter().flat_map(|s| &s.rows).nth(row).unwrap();
+    assert_eq!(drawn.label, "Basement");
+    assert_eq!(drawn.toggle, Some(true));
+    assert_eq!(drawn.detail, "Allowed on this network. Connected without encryption.");
+    assert_eq!(root.state.plaintext, vec![true]);
+
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    let mut fx = Effects::new(&mut out, MachineId::Session, &mut present);
+    let captured = cx(None);
+    {
+        let _step = plx_base::step::StepScope::enter();
+        root.activate(root.form.key_at(row).unwrap().0, captured.views.directory, &mut fx);
+    }
+    execute_storage_effects(&out);
+    assert_eq!(plx_plex::plex::grant::granted_origin("lan-machine"), None, "revoked before the write lands");
+    assert!(!plx_plex::plex::grant::allowed_under(plx_plex::plex::CredentialPolicy::HttpsOnly, &lan));
+    assert_eq!(root.state.plaintext, vec![false], "the switch shows the answer optimistically");
+    let drawn = root.form.table.sections.iter().flat_map(|s| &s.rows).nth(row).unwrap();
+    assert_eq!(drawn.toggle, Some(false));
+    assert_eq!(drawn.detail, "Not allowed. Only encrypted connections.");
+    plx_base::storage_worker::drain_for_test();
+    assert_eq!(plx_plex::plex::session::peek().plaintext_choice(&account, "lan-machine"), PlaintextChoice::Revoked);
+    plx_plex::plex::grant::reset_for_test();
+    plx_plex::plex::reset_servers_for_test();
+}
+
+/// Nobody was ever asked, so there is nothing to turn off: no section at all.
+#[test]
+fn no_unencrypted_connection_section_without_an_answer() {
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-plaintext-none");
+    let root = RootPage::new(EntryId(0), cx(None).views.directory, &crate::registry::capture_fixture());
+    assert!(root.form.index_of_key(RowKey(PLAINTEXT_KEY_BASE)).is_none());
+    assert!(root.state.plaintext.is_empty());
+}
+
+/// **Turning a switch ON asks first, and a never-asked server is listed** (PLX-NATIVE-10, code
+/// review 3 and design review D8). A server discovery offers "Connect without encryption?" for
+/// and nobody has answered shows its switch OFF; turning it on records nothing — it opens the
+/// SAME question the read-outs ask (`screens::plaintext_question`), seated on *Not now* — and only
+/// its *Connect* sends the answer (Allowed, re-finding the server), shown on at once.
+#[test]
+fn turning_an_unencrypted_connection_on_asks_the_shared_question_first() {
+    use plx_plex::plex::session::PlaintextChoice;
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-plaintext-ask");
+    plx_plex::plex::reset_servers_for_test();
+    plx_plex::plex::grant::reset_for_test();
+    plx_plex::plex::grant::offered(plx_plex::plex::grant::scope(), plx_plex::plex::grant::PlaintextVerdict {
+        machine_id: "lan-machine".into(), name: "Basement".into(), shared_by: String::new(),
+        eligibility: plx_plex::plex::probe::PlaintextEligibility::Eligible, choice: PlaintextChoice::Undecided,
+    });
+    let mut root = RootPage::new(EntryId(0), cx(None).views.directory, &crate::registry::capture_fixture());
+    let row = root.form.index_of(&RootId::Plaintext(ServerMachineId("lan-machine".into())))
+        .expect("an offered, never-asked server has its switch");
+    let drawn = root.form.table.sections.iter().flat_map(|s| &s.rows).nth(row).unwrap();
+    assert_eq!(drawn.label, "Basement", "an offered server is named from its discovery, not the session file");
+    assert_eq!(drawn.toggle, Some(false));
+    assert_eq!(drawn.detail, "Not allowed. Only encrypted connections.");
+
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    let mut fx = Effects::new(&mut out, MachineId::Session, &mut present);
+    root.activate(root.form.key_at(row).unwrap().0, cx(None).views.directory, &mut fx);
+    assert!(root.alert.is_open(), "ON asks before anything is recorded");
+    assert_eq!(root.state.plaintext, vec![false]);
+    assert!(plx_plex::plex::grant::choices(&[], &plx_plex::plex::session::peek().account_token).is_empty(),
+        "nothing is recorded yet");
+    let mut groups = Vec::new();
+    Focusable::<InnerHost>::groups(&root, &cx(None), &mut groups);
+    assert_eq!(groups.iter().map(|g| g.id).collect::<Vec<_>>(), [ALERT_GROUP], "the question traps focus");
+    let from = Placed { rect: Rect::FULL, rest_rect: Rect::FULL, clip: Rect::FULL, index: None };
+    assert_eq!(Focusable::<InnerHost>::seat(&root, ALERT_GROUP, from, &cx(None)).elem, super::super::registry::ALERT,
+        "seated on Not now");
+
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    let mut fx = Effects::new(&mut out, MachineId::Session, &mut present);
+    let connect = FocusKey { entry: EntryId(0), elem: super::super::registry::ALERT + 1 };
+    root.step(&ScreenEvent::PressCommit(plx_machine::machine::PressId(1)), &cx(Some(connect)), &mut fx);
+    let answers: Vec<_> = out.iter().filter_map(|st| match &st.fx {
+        Fx::App(super::super::registry::AppFx::Session(plx_session::auth::SessionCmd::AnswerPlaintext { machine_id, choice, .. }))
+            if machine_id == "lan-machine" => Some(*choice),
+        _ => None,
+    }).collect();
+    assert_eq!(answers, [PlaintextChoice::Allowed]);
+    assert!(!root.alert.is_open());
+    assert_eq!(root.state.plaintext, vec![true], "the switch shows the answer optimistically");
+    plx_plex::plex::grant::reset_for_test();
+    plx_plex::plex::reset_servers_for_test();
+}
+
+fn inputs_for(signed_in: bool) -> RootInputs {
+    RootInputs {
+        trace: plx_os::playback_trace::Status::Off,
+        signed_in, multi_user: true, library_count: 3, auto_sign_in: false, trailer_autoplay: true, resolution: UiResolution::Auto, resolution_offered: true,
+        language: plx_os::i18n::Preference::System,
+        under_posters: plx_plex::plex::session::UnderPosters::DEFAULT, plaintext: Vec::new(),
+    }
+}
+
+/// **Interface resolution is a signed-in row that opens its picker** (Automatic, 1600x900, 1280x720,
+/// 960x540), and Automatic is the native canvas rather than any smaller size.
+#[test]
+fn the_interface_resolution_row_is_signed_in_only_and_reads_each_option() {
+    let row_value = |signed_in: bool, resolution: UiResolution| -> Option<String> {
+        let mut real = FormTable::<RootId, Action, SettingsPage>::new(super::super::registry::BAND);
+        real.set(root_form(&RootInputs { resolution, ..inputs_for(signed_in) }), None);
+        let i = real.index_of(&RootId::Resolution)?;
+        real.table.sections.iter().flat_map(|s| s.rows.iter()).nth(i).expect("the row exists").value.clone()
+    };
+    assert_eq!(row_value(false, UiResolution::Auto), None, "the signed-out root is the sign-in path's short list");
+    assert_eq!(row_value(true, UiResolution::Auto).as_deref(), Some(plx_os::i18n::msg::settings_resolution_auto()));
+    assert_eq!(row_value(true, UiResolution::Hd900).as_deref(), Some("1600x900"));
+    assert_eq!(row_value(true, UiResolution::Hd720).as_deref(), Some("1280x720"));
+    assert_eq!(row_value(true, UiResolution::Sd540).as_deref(), Some("960x540"));
+    let mut real = FormTable::<RootId, Action, SettingsPage>::new(super::super::registry::BAND);
+    real.set(root_form(&inputs_for(true)), None);
+    let i = real.index_of(&RootId::Resolution).expect("the row exists");
+    assert_eq!(real.binding_at(i).expect("bound").kind.clone(), RowKind::Nav(SettingsPage::Picker(PickerKind::UiResolution)),
+        "OK opens the picker like every other multi-value setting; it does not cycle");
+}
+
+/// **The Interface resolution row exists on webOS 1-3 only.** Hidden (`resolution_offered` false,
+/// every webOS 4+ set and an unknown one) the root is exactly the root without the row, in the same
+/// order, signed in or out; shown (webOS 1-3) it is that same list with one more row between the
+/// rows it sits between. The rule the flag is fed from is `device::offers_ui_resolution`.
+#[test]
+fn the_interface_resolution_row_is_offered_on_webos_1_to_3_only() {
+    let keys = |inputs: RootInputs| -> (Vec<u32>, Option<usize>) {
+        let mut real = FormTable::<RootId, Action, SettingsPage>::new(super::super::registry::BAND);
+        real.set(root_form(&inputs), None);
+        let all = (0..real.table.n_rows() as usize).filter_map(|i| real.key_at(i)).map(|k| k.0).collect();
+        (all, real.index_of(&RootId::Resolution))
+    };
+    for signed_in in [false, true] {
+        let (hidden, at_hidden) = keys(RootInputs { resolution_offered: false, ..inputs_for(signed_in) });
+        let (shown, at_shown) = keys(RootInputs { resolution_offered: true, ..inputs_for(signed_in) });
+        assert_eq!(at_hidden, None, "hidden on webOS 4+ (signed_in={signed_in})");
+        if signed_in {
+            let at = at_shown.expect("visible on webOS 1-3 when signed in");
+            let mut without = shown.clone();
+            assert_eq!(without.remove(at), RootId::Resolution.key().0);
+            assert_eq!(without, hidden, "the webOS 4+ root is the same rows in the same order");
+            assert_eq!(shown.len(), hidden.len() + 1, "and the extra row is the only difference");
+        } else {
+            assert_eq!(at_shown, None, "the signed-out root never shows it");
+            assert_eq!(shown, hidden);
+        }
+    }
+    // the rule the flag is fed from
+    for (major, offered) in [(0, false), (1, true), (2, true), (3, true), (4, false), (5, false), (6, false), (22, false)] {
+        assert_eq!(plx_os::tv::device::offers_ui_resolution(major), offered, "webOS major {major}");
+    }
+    // a host test has no television: the real page is the webOS 4+ shape and has no such row
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-resolution-gate");
+    let page = RootPage::new(EntryId(0), cx(None).views.directory, &crate::registry::capture_fixture());
+    assert_eq!(page.form.index_of(&RootId::Resolution), None);
+}
+
+/// **Reordering the root moves no identity.** A form that declares the same rows in a different
+/// order (About first, Language before Playback, Legal before Privacy) answers every Id-addressed
+/// question exactly as `root_form` does: the same key, the same activation. The seat a BACK
+/// restores is the row's key (`Fx::Remember` records the focused element), so it is the same
+/// too. Positions DO differ — that is what makes this a test of identity, not of layout.
+#[test]
+fn reordering_the_root_form_changes_no_id_addressed_behaviour() {
+    let build = |order: &[usize]| {
+        let mut sec = FormSection::new("All");
+        for &i in order {
+            let (id, dest, title) = [
+                (RootId::Playback, SettingsPage::Playback, "Playback"),
+                (RootId::Language, SettingsPage::Language, "Language"),
+                (RootId::Privacy, SettingsPage::Privacy, "Privacy"),
+                (RootId::Legal, SettingsPage::Legal, "Legal"),
+                (RootId::About, SettingsPage::About, "About"),
+            ][i].clone();
+            sec = sec.item(id, RowKind::Nav(dest), Action::Door, Row::new(title).chevron(true));
+        }
+        let mut t = FormTable::<RootId, Action, SettingsPage>::new(super::super::registry::BAND);
+        t.set(Form::new().section(sec), None);
+        t
+    };
+    let natural = build(&[0, 1, 2, 3, 4]);
+    let shuffled = build(&[4, 1, 0, 3, 2]);
+    let mut moved = 0;
+    for (id, dest) in [
+        (RootId::Playback, SettingsPage::Playback), (RootId::Language, SettingsPage::Language),
+        (RootId::Privacy, SettingsPage::Privacy), (RootId::Legal, SettingsPage::Legal),
+        (RootId::About, SettingsPage::About),
+    ] {
+        let (a, b) = (natural.index_of(&id).unwrap(), shuffled.index_of(&id).unwrap());
+        moved += usize::from(a != b);
+        assert_eq!(natural.key_at(a), shuffled.key_at(b), "{id:?}: the key does not follow the layout");
+        assert_eq!(natural.key_at(a), Some(id.key()));
+        assert_eq!(natural.activate(a), Some(Activation::Push(dest)));
+        assert_eq!(shuffled.activate(b), Some(Activation::Push(dest)), "{id:?}: OK pushes the same page");
+        assert_eq!(natural.index_of_key(id.key()), Some(a));
+        assert_eq!(shuffled.index_of_key(id.key()), Some(b));
+    }
+    assert!(moved > 0, "the two orders must actually differ");
+    // and the real form's keys are unique, below the band, and unrelated to position
+    for signed_in in [false, true] {
+        let mut real = FormTable::<RootId, Action, SettingsPage>::new(super::super::registry::BAND);
+        real.set(root_form(&inputs_for(signed_in)), None);
+        let keys: Vec<u32> = (0..real.table.n_rows() as usize).filter_map(|i| real.key_at(i)).map(|k| k.0).collect();
+        assert!(keys.iter().all(|&k| k < super::super::registry::BAND));
+        if signed_in {
+            assert!(keys.windows(2).any(|w| w[0] > w[1]), "keys do not ascend with position: {keys:?}");
+        }
+        let mut unique = keys.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "keys are unique: {keys:?}");
+    }
+}
+
+/// **BACK from each root door re-seats focus on the same row** — through the real surface: focus
+/// the door by its identity, OK pushes its page, and the pop's `Enter` seats `FocusTarget::Elem`
+/// of that same row key, which the surface also holds in `remembered`.
+#[test]
+fn back_from_each_root_door_reseats_focus_on_the_same_root_id() {
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-back-reseat");
+    for (id, dest) in [
+        (RootId::Favourites, SettingsPage::Favourites),
+        (RootId::Playback, SettingsPage::Playback),
+        (RootId::AudioSubtitles, SettingsPage::AudioSubtitles),
+        (RootId::Language, SettingsPage::Language),
+        (RootId::Privacy, SettingsPage::Privacy),
+        (RootId::Legal, SettingsPage::Legal),
+        (RootId::About, SettingsPage::About),
+    ] {
+        let mut s = RouteSurface::new(
+            EntryId(0), InstanceId(0), Family::Settings, SettingsPage::Root
+        );
+        step(&mut s, ScreenEvent::Mount, None);
+        let row = FocusKey { entry: EntryId(0), elem: root_key(id.clone()) };
+        step(&mut s, ScreenEvent::FocusMoved { from: None, to: row, by: By::Dir }, Some(row));
+        step(&mut s, ScreenEvent::Activate(row.elem), Some(row));
+        assert_eq!(s.inner.top().unwrap().arg, dest, "OK on {id:?} pushes {dest:?}");
+        assert_eq!(s.remembered.iter().map(|(_, k)| *k).collect::<Vec<_>>(), [row.elem],
+            "the seat is {id:?}'s key");
+        settle(&mut s);
+        let out = step(&mut s, back_key(), None);
+        assert_eq!(s.inner.top().unwrap().arg, SettingsPage::Root);
+        let seat = out.iter().find_map(|st| match &st.fx {
+            Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(Enter::Fresh { focus }))) => Some(*focus),
+            _ => None,
+        });
+        assert!(matches!(seat, Some(FocusTarget::Elem(k)) if k == row), "BACK re-seats {id:?}: {seat:?}");
+    }
+}
+
+/// A rebuild keeps focus on the row by identity; a row that disappears (sign-out drops Favorite
+/// libraries, Audio & subtitles and the switches) lands on its NEXT surviving neighbour in the
+/// old order, and the page's own state follows.
+#[test]
+fn a_rebuild_keeps_the_row_by_id_and_a_vanished_row_falls_to_its_neighbour() {
+    let _g = plx_base::testlock::serial();
+    let _sess = multi_user_session("root-rebuild-identity");
+    let mut page = RootPage::new(EntryId(0), cx(None).views.directory, &crate::registry::capture_fixture());
+    select_root(&mut page, RootId::Language);
+    page.rebuild(cx(None).views.directory);
+    assert_eq!(page.form.selected_id(), Some(&RootId::Language), "a rebuild keeps the row it is on");
+    assert_eq!(page.state.sel, RootId::Language.key());
+
+    for (from, lands) in [
+        (RootId::AudioSubtitles, RootId::Language),
+        (RootId::TrailerAutoplay, RootId::Privacy),
+        (RootId::Favourites, RootId::Playback),
+        (RootId::About, RootId::About),
+    ] {
+        select_root(&mut page, from.clone());
+        assert_eq!(page.form.selected_id(), Some(&from));
+        let keep = page.form.selected_id().cloned();
+        page.form.set(root_form(&inputs_for(false)), keep.as_ref());
+        assert_eq!(page.form.selected_id(), Some(&lands), "{from:?} left: focus falls to {lands:?}");
+        page.form.set(root_form(&inputs_for(true)), None);
+    }
+}
+
+/// The root keeps ONE Diagnostics row (Settings v2) whose value is the recording switch, Off or On;
+/// the status the runner answers drives that value, and the trace rows live one page down
+/// (`settings_diagnostics.rs`, `settings_v2_tests.rs`).
+#[test]
+fn the_root_diagnostics_row_reads_the_status_the_runner_answers() {
+    use plx_os::playback_trace::Status;
+    let _serial = plx_base::testlock::serial();
+    let mut root = RootPage::new(EntryId(0), cx(None).views.directory, &crate::registry::capture_fixture());
+    let mut present = plx_machine::present::Present::new();
+    let mut out = Vec::new();
+    let mut fx = Effects::new(&mut out, MachineId::Instance(InstanceId(0)), &mut present);
+    assert_eq!(root.state.trace, Status::Off);
+    root.step(&ScreenEvent::App(super::super::registry::AppMsg::PlaybackTrace(Status::Recording)), &cx(None), &mut fx);
+    assert_eq!(root.state.trace, Status::Recording);
+    assert_eq!(diagnostics::root_value(Status::Recording), plx_os::i18n::msg::widgets_toggle_on());
+    for not_recording in [Status::Off, Status::Saved, Status::Saving, Status::Exported, Status::Unavailable, Status::Failed] {
+        assert_eq!(diagnostics::root_value(not_recording), plx_os::i18n::msg::widgets_toggle_off(),
+            "{not_recording:?} is not a recording, and Off is the toggle's own word");
+    }
+    // opening it is a Nav row's own job, and no root row dispatches a trace command any more
+    let index = root.form.index_of_key(RowKey(root_key(RootId::Diagnostics))).expect("the Diagnostics row");
+    assert!(matches!(root.form.activate(index), Some(Activation::Push(SettingsPage::Diagnostics))));
+}
+
+fn hud_return_to_player_hud(remove: bool) {
+    use crate::registry::HudList;
+    use crate::registry::HudCmd;
+    use plx_data::hudpacks::{Entry,Meta,Source,Trust,BUILTIN_CLASSIC};
+    let _g=plx_base::testlock::serial();let _session=scratch_session("hud-ancestor-return");
+    let index=plx_data::hudpacks::catalog::parse(include_bytes!("../../../tests/fixtures/hud-gallery/index.json")).unwrap();
+    let p=index.entries[0].clone();let sha=p.sha();
+    let list=HudList {app_version:"0.10.0".into(),language_tag:"en".into(),
+        catalog:plx_data::hudpacks::catalog::Snapshot {index:Some(std::sync::Arc::new(index)),..Default::default()},
+        entries:vec![Entry {id:BUILTIN_CLASSIC.into(),meta:None,sha:None,source:None,trust:Trust::BuiltIn,loadable:Ok(()),until_restart:false,selected:true,dev_source:None},
+            Entry {id:p.id.clone(),meta:Some(Meta {id:p.id.clone(),name:p.name.clone(),version:p.version,package_format:p.package_format,hud_format:p.hud_format}),
+                sha:Some(sha),source:Some(Source::Registry),trust:Trust::Registry,loadable:Ok(()),until_restart:false,selected:false,dev_source:None}],..HudList::default()};
+    let outer=EntryId(987);let mut s=RouteSurface::new(outer,InstanceId(4),Family::Settings,SettingsPage::Root);
+    step(&mut s,ScreenEvent::Mount,None);
+    let pages=if remove {vec![SettingsPage::Playback,SettingsPage::PlayerHud,SettingsPage::HudGallery,SettingsPage::HudDetail(sha),SettingsPage::HudAbout(sha)]}
+        else {vec![SettingsPage::Playback,SettingsPage::PlayerHud,SettingsPage::HudGallery,SettingsPage::HudDetail(sha)]};
+    for page in pages {
+        let out=forwarded(&mut s,Fx::Nav(NavOp::Push(page)));
+        for e in &out {if let Fx::App(AppFx::Huds(HudCmd::Open(tx)|HudCmd::Watch(tx)))=&e.fx {tx.send(list.clone()).unwrap();}}
+        step(&mut s,ScreenEvent::Tick(Tick{ms:16,dt_us:16000}),None);
+    }
+    assert!(s.inner.entry(outer).is_none(),"the focus surface ID must differ from every inner navigation ID");
+    let action=if remove {4} else {1};
+    let out=step(&mut s,ScreenEvent::Activate(action),Some(FocusKey {entry:outer,elem:action}));
+    assert!(out.iter().any(|e|matches!(&e.fx,Fx::App(AppFx::Huds(HudCmd::Select(id)|HudCmd::Remove(id))) if id==&p.id)));
+    assert_eq!(name(&s),word::PLAYER_HUD,"return must preserve the real Settings ancestor chain");
+    step(&mut s,back_key(),None);assert_eq!(name(&s),word::PLAYBACK);
+}
+
+#[test]
+fn use_hud_returns_to_player_hud_with_an_unrelated_surface_id() {hud_return_to_player_hud(false);}
+#[test]
+fn remove_hud_returns_to_player_hud_with_an_unrelated_surface_id() {hud_return_to_player_hud(true);}
+
+#[test]
+fn retained_offer_expiry_rebuilds_the_switches_without_a_roster_change() {
+    use plx_plex::plex::{grant::PlaintextVerdict, probe::PlaintextEligibility, session::PlaintextChoice};
+    let _serial = plx_base::testlock::serial();
+    let mut inputs = crate::registry::ScreenInputs::default();
+    std::sync::Arc::make_mut(&mut inputs.session).account_token = "retained-account".into();
+    inputs.settled = true;
+    std::sync::Arc::make_mut(&mut inputs.grants).offers.push(PlaintextVerdict {
+        machine_id: "server".into(), name: "Server".into(), shared_by: String::new(),
+        eligibility: PlaintextEligibility::Eligible, choice: PlaintextChoice::Undecided });
+    let mut cx = cx(None);
+    cx.views.inputs = &inputs;
+    let mut page = RootPage::new(EntryId(0), cx.views.directory, &cx.views.inputs);
+    assert_eq!(page.plaintext_rows, vec![("server".into(), false)]);
+    let mut expired = inputs.clone();
+    expired.grants = Default::default();
+    expired.grant_generation += 1;
+    cx.views.inputs = &expired;
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    page.step(&ScreenEvent::Tick(Default::default()), &cx,
+        &mut Effects::new(&mut out, MachineId::Instance(InstanceId(0)), &mut present));
+    assert!(page.plaintext_rows.is_empty());
+}
+
+#[test]
+fn a_success_receipt_waits_for_the_next_captured_authority() {
+    let _serial = plx_base::testlock::serial();
+    let mut inputs = crate::registry::ScreenInputs::default();
+    inputs.session = std::sync::Arc::new(inputs.session.with_auto_sign_in(false));
+    inputs.settled = true;
+    let mut cx = cx(None);
+    cx.views.inputs = &inputs;
+    let mut page = RootPage::new(EntryId(0), cx.views.directory, cx.views.inputs);
+    let (reply, ticket) = std::sync::mpsc::channel();
+    reply.send(true).unwrap();
+    plx_base::storage_worker::drain_for_test();
+    page.pending_auto = Some((true, ticket));
+    page.rebuild(cx.views.directory);
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    page.step(&ScreenEvent::Tick(Default::default()), &cx,
+        &mut Effects::new(&mut out, MachineId::Instance(InstanceId(0)), &mut present));
+    assert!(page.state.auto_sign_in, "an old captured snapshot cannot undo a successful write");
+    assert!(page.pending_auto.is_some());
+    let mut confirmed = inputs.clone();
+    confirmed.session = std::sync::Arc::new(confirmed.session.with_auto_sign_in(true));
+    confirmed.visible_generation += 1;
+    cx.views.inputs = &confirmed;
+    page.step(&ScreenEvent::Tick(Default::default()), &cx,
+        &mut Effects::new(&mut out, MachineId::Instance(InstanceId(0)), &mut present));
+    assert!(page.pending_auto.is_none());
+    assert!(page.state.auto_sign_in);
+}
+
+#[test]
+fn adjacent_root_rows_use_independent_retained_profile_and_install_facts() {
+    use plx_plex::plex::session::{ProfilePrefs, UnderPosters};
+    use plx_os::i18n::Preference;
+    let _serial = plx_base::testlock::serial();
+    let before = plx_os::i18n::saved_preference_for_test(Preference::En);
+    let off = UnderPosters { title: false, ..UnderPosters::DEFAULT };
+    let a = crate::registry::ScreenInputs { install_language: Preference::Be,
+        preferences: Some(ProfilePrefs { under_posters: Some(off), ..Default::default() }), ..Default::default() };
+    let b = crate::registry::ScreenInputs { install_language: Preference::Es,
+        preferences: Some(ProfilePrefs { under_posters: Some(UnderPosters::DEFAULT), ..Default::default() }), ..a.clone() };
+    let directory = plx_data::stores::browse::DirectoryView::empty_for_test();
+    let (first, second) = {
+        let _step = plx_base::step::StepScope::enter();
+        (RootPage::new(EntryId(1), directory, &a), RootPage::new(EntryId(2), directory, &b))
+    };
+    plx_os::i18n::saved_preference_for_test(before);
+    assert_eq!(first.state.language, Preference::Be);
+    assert_eq!(second.state.language, Preference::Es);
+    assert_eq!(first.state.under_posters, off);
+    assert_eq!(second.state.under_posters, UnderPosters::DEFAULT);
+}
+
+#[test]
+fn adjacent_root_pending_install_pick_refreshes_with_unchanged_cache_and_profile() {
+    use plx_os::i18n::Preference;
+    let _serial = plx_base::testlock::serial();
+    let mut inputs = crate::registry::ScreenInputs::default();
+    inputs.install_language = plx_os::i18n::saved_preference();
+    let mut context = cx(None);
+    context.views.inputs = &inputs;
+    let mut page = RootPage::new(EntryId(0), context.views.directory, &inputs);
+    let mut initial_out = Vec::new();
+    let mut initial_present = Present::new();
+    {
+        let _step = plx_base::step::StepScope::enter();
+        page.step(&ScreenEvent::Tick(Default::default()), &context,
+            &mut Effects::new(&mut initial_out, MachineId::Instance(InstanceId(0)), &mut initial_present));
+    }
+    let mut pending = inputs.clone();
+    pending.install_language = if inputs.install_language == Preference::Be { Preference::Es } else { Preference::Be };
+    assert!(std::sync::Arc::ptr_eq(&pending.session, &inputs.session));
+    assert_eq!(pending.session_key(), inputs.session_key());
+    context.views.inputs = &pending;
+    let mut out = Vec::new();
+    let mut present = Present::new();
+    {
+        let _step = plx_base::step::StepScope::enter();
+        page.step(&ScreenEvent::Tick(Default::default()), &context,
+            &mut Effects::new(&mut out, MachineId::Instance(InstanceId(0)), &mut present));
+    }
+    assert_eq!(page.state.language, pending.install_language, "a retained next-launch pick must not wait for the stored Session Arc");
+}
+
+// ---- accessibility ids -----------------------------------------------------------------------
+
+/// **Every page of the family the surface mounts answers ids that conform** (`a11y::conformance`: every
+/// element projects, ids are unique, `a11y_find` inverts `a11y`, `a11y_elems` lists no more keys than each
+/// group declares, and some when it declares any), and **no two pages answer one namespace**: the surface
+/// answers its top page's, so an id says which page it was read on, though a Legal document, the Legal
+/// index and About share one heartbeat word.
+#[test]
+fn every_page_the_surface_mounts_conforms_and_answers_a_namespace_of_its_own() {
+    // `settings_page_conforms` takes the serial lock and the scratch session for each mount itself
+    let pages = [
+        SettingsPage::Root,
+        SettingsPage::Language,
+        SettingsPage::UnderPosters,
+        SettingsPage::UnderPostersDetails(PosterKind::Movie),
+        SettingsPage::UnderPostersDetails(PosterKind::Show),
+        SettingsPage::Contribute,
+        SettingsPage::Playback,
+        SettingsPage::AudioSubtitles,
+        SettingsPage::Picker(PickerKind::Quality),
+        SettingsPage::Privacy,
+        SettingsPage::Preview(0),
+        SettingsPage::Legal,
+        SettingsPage::About,
+        SettingsPage::Document(0),
+        SettingsPage::Diagnostics,
+        SettingsPage::PlayerHud,
+        SettingsPage::HudGallery,
+    ];
+    let mut seen: Vec<&'static str> = Vec::new();
+    for page in pages {
+        let [ns] = settings_page_conforms(page)[..] else { panic!("{page:?}: one mounting, one namespace") };
+        assert!(!seen.contains(&ns), "{page:?}: the namespace {ns:?} is another page's already");
+        seen.push(ns);
+    }
+}
+
+/// The first-run consent question mounted as `AppArg::FirstRunConsent` mounts it: the same
+/// `RouteSurface` in the first-run family, over the stage-0 page (the coverage table calls this).
+pub(crate) fn first_run_consent_conforms() -> plx_ui::a11y::Namespaces {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("a11y-first-run-consent");
+    let mut s = RouteSurface::new(EntryId(0), InstanceId(0), Family::FirstRunConsent, SettingsPage::ConsentStage(0));
+    step(&mut s, ScreenEvent::Mount, None);
+    vec![plx_ui::a11y::conform::<InnerHost, _>(&s, &cx(None))]
+}
+
+/// One page of the Settings family mounted as its surface mounts it (`RouteSurface` rooted at `page`,
+/// the Mount event delivered) and run through the id conformance; the namespace is the page's own.
+/// The coverage table calls this for every `SettingsPage` arm.
+pub(crate) fn settings_page_conforms(page: SettingsPage) -> plx_ui::a11y::Namespaces {
+    let _g = plx_base::testlock::serial();
+    let _sess = scratch_session("a11y-pages");
+    let mut s = RouteSurface::new(EntryId(0), InstanceId(0), Family::Settings, page);
+    step(&mut s, ScreenEvent::Mount, None);
+    vec![plx_ui::a11y::conform::<InnerHost, _>(&s, &cx(None))]
+}
