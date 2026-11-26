@@ -1,0 +1,104 @@
+{
+  "assumptions": [
+    "Offline source-backed unit-enum proof; certificate changes require source review.",
+    "",
+    "No Cargo, cached output, generator execution, Copy axiom or type-name exemption.",
+    "The certificate pins the entire production pipeline and include namespace, not the",
+    "language list. Its reviewed template emits unit variants in every configuration.",
+    "Only enum values are certified: LocaleContext/OnceLock and methods are not.",
+    "Assumes ordinary Cargo/Rust/std/serde execution, no external build/config/compiler",
+    "overrides, output tampering or unsafe-code/compiler unsoundness attestation."
+  ],
+  "configs": {
+    "../.cargo/config": null,
+    "../.cargo/config.toml": null,
+    ".cargo/config": null,
+    ".cargo/config.toml": "82f061c716740e16cfee63a74d87159e0e0dc253e1092b87c54190c603515b14"
+  },
+  "grammar": {
+    "Language": {
+      "catalogue_unit_variants": true,
+      "suffix": [
+        "Pseudo"
+      ]
+    },
+    "Preference": {
+      "catalogue_unit_variants": true,
+      "prefix": [
+        "System"
+      ]
+    }
+  },
+  "include": "include!(concat!(env!(\"OUT_DIR\"), \"/languages.rs\"));",
+  "lock": "34a3214294def4adceadbb1cd889926b49ae85ce5a8a8b37ad9ab2ee828ccb03",
+  "machine_newtype": "reviewed local newtype macro emits pub struct Name(pub u32); doc attributes only",
+  "manifests": {
+    "Cargo.toml": "0523c9ba3ea3583b4439b29fdbbbe301b9fb54d7cf3afb89750312ebf15268f5",
+    "appkit/Cargo.toml": "5cc1214cba7746fe0f2d4cfa5047b599e0d5124abe7bdaebe210381021b88c4a",
+    "base/Cargo.toml": "70381756942ed7c9e61532bcb3bdab9a135ebcca5de2e343669b12f2d6086bc7",
+    "data/Cargo.toml": "a593eb0dc89108bf0aeaa97ae81f357c45c935d55e288b9393db8f902db409dd",
+    "gfx/Cargo.toml": "a25b3c3d2ffa326949694ab36de52f4233ed3dd4372e69eb0af2b66bace3cb72",
+    "jellyfin/Cargo.toml": "1e2bee52f1b0307e55d29b8bf5e7444f248a86421e1ff55fb490500de0e50765",
+    "machine/Cargo.toml": "ac864d90649890758fa1ea8bae030139c478af437d81efb4f0e707e6c3136095",
+    "media-codecs/Cargo.toml": "503c8681289314b5c8a63195aad6796cbad93fcb3eedd8d7cba9e8ed0233783f",
+    "media/Cargo.toml": "794e12f9e6d64c467ac91c9be198c51b83db7bbf9a96494c15e83f808eb94ef2",
+    "net/Cargo.toml": "bfdb3a08200642eeeafc9762733718c407529f26dce8a7b90665bc77ac928171",
+    "os/Cargo.toml": "5277cc70ba105d97dbea8bdbeac04a3f56674b7cf80419c49bf0d7e0f1874624",
+    "owp/Cargo.toml": "2c1354bce16b34f0d006fc04cd4c8eb22ef91f00063b53a1113e32f475ecae33",
+    "platform-desktop/Cargo.toml": "268cff40415f26a73a76a13c9f108791a870c081eef3955e958f17e63ed94248",
+    "platform-tizen/Cargo.toml": "dfc77e7a964633ae5b56bd8bb347f60befe04a8ab854b20191baff7079dd9b93",
+    "platform-webos/Cargo.toml": "deacc588a11976f39ff0e9c9e1a74c3e64db55810fed75579a3647ea89e00f9c",
+    "play-feed/Cargo.toml": "a80e0d36bdf010044624fd47a15d7ea07d9a52f30bbc553b77927f773ea93435",
+    "play-uri/Cargo.toml": "48528dd164a910a32f5396ab8f5bc4c6c13f6fd5f1136ee080f8424fe663280b",
+    "playback-contract/Cargo.toml": "bde335ea645552d4f7481b007b80204ecb5bb592caaca22af58a8361cd050dcf",
+    "plex/Cargo.toml": "6adab213443a74960acf8afbbc5125dce8923b7dd9282fc505a151d07a19aa69",
+    "screens/Cargo.toml": "772bc873f1779152f52807f1f5d6ea2dfa5a46cab42523b86821f50aa0627d2b",
+    "session/Cargo.toml": "d8bf06901d37a3cba128025d4a1f653f9bb8c6d920119c4e83d780b85bc0f9a2",
+    "shell-sdl/Cargo.toml": "4aed9782cb2dd6cb8b99045e4f17d6104ef6f89560f102597a76adfea93c5f56",
+    "storage/Cargo.toml": "4b8576b04a5877e95d084a49a16b30224c275ae29b4a192c40725ac819500150",
+    "telemetry/Cargo.toml": "6060d6073012bf11614f6fb80c04f7e9bbe6b2fad25551c45bda244b29d3bca6",
+    "ui/Cargo.toml": "7375c6a73cb2558c7c0f62da7b0bd4beb2a5b78f5460ee35e93b1045c0e80eec"
+  },
+  "module": "os/src/i18n/mod.rs",
+  "package": "plx_os",
+  "review": [
+    "build.rs -> catalog::build(locales, OUT_DIR), no cfg-dependent producer",
+    "parse_registry derives variant solely from validated ASCII tag",
+    "discover preserves validated LanguageSpec; compile sorts by row",
+    "languages_rs emits only unit variants; Pseudo cfg_attr only allows dead_code",
+    "string slots use Rust Debug escaping; numeric slots are integers",
+    "install_identities writes only install_identities.rs, never languages.rs",
+    "PR1366: PressRead identity/live/active and owned-present sibling/test modules; canonical machine child and doc-only u32 newtype producer unchanged",
+    "PR1385: Canon byte-feed loops inlined (impl Canon and canon_tests only, FNV-1a byte stream unchanged); newtype macro and its ten u32 invocations unchanged",
+    "UI FIFO on PR1385: AppCommandId(u64), AppCommandOutcome and generic AppCommand<F,R> appended after unchanged doc-only newtype producer and its ten u32 invocations; none certified as generated declarations",
+    "Owned runtime: HoldHintRead/Event, ModalRead, PageImageRead, Cx/Fx projections, AppEffect partition and PresentationAuthority/Receipt added outside the unchanged doc-only newtype macro and ten u32 invocations; Arc-bearing receipts and effect contracts are not certified; canonical include namespace unchanged"
+  ],
+  "schema": "plx.readonly.generated-unit-enums.v1",
+  "sources": {
+    "build_support/install_identities.rs": "ee38a9be37796abe5a9a98e9ff3562012e4ac7cfb01c32e24755a1518fcaa982",
+    "machine/src/lib.rs": [
+      "105afdbb05fb762e6752cef260b6d928b1d828993350aaa71651f96cee0c3188",
+      "c35d39ae620b5607e7035222ab1023799adaf091d6a4f737a847dd70b26c1b36"
+    ],
+    "machine/src/machine.rs": [
+      "571415d64a9885248f852b402153feedd4660acbe03606e4796c59659726049f",
+      "03a6e18f576dcbaff66c3d7405923b155302bfb2996bb373dac115ece055a5bf",
+      "d08b44dbff241962286eb7e1f85897073ba9f2f712a2ba935837f901635369a8",
+      "9b1ffb66c7ba2eb9fdffcb4bcbf0a29cda87a003cce69b16c73567c8bc0a65b0",
+      "b2794fd0febbbd98febfb45e12fedadcbb58900b02674af7f665bd15adea458d",
+      "ff378a339f0b4934a4934ab25aa4965a51a27f38d053fe19c1abb382b690ee45",
+      "1fafb56dcc9f423d7c00fd989a3f11bd21022d64d62d8f71f70e3eb97f6b4975",
+      "8f46da48c81057c28aa19524d80a585e5aa136bcdd841a1a5359a9f576bbf7b5"
+    ],
+    "os/Cargo.toml": "5277cc70ba105d97dbea8bdbeac04a3f56674b7cf80419c49bf0d7e0f1874624",
+    "os/build.rs": "7e1e3e5ed60ea3433200bb943123aaeb2c892b81bc671ec0d1501ac6e3043af3",
+    "os/build_support/catalog.rs": "d74e08efbe4077a028e2fca204123963ac3dac0ed33335139be53b343c20b185",
+    "os/src/i18n/mod.rs": [
+      "40a13d07a43c772b10587e510a69502684abfa1f582ce355b22fd935a8c46f45",
+      "867bb41013e0016d186e699698c762685325aa02f01ebe92d39797c0a41a37e1",
+      "b523c0e30bdc9c78ebd8740e4e7899632cb0cb383532f7c6d2a7ae6013734e64"
+    ],
+    "os/src/lib.rs": "4f043004cd90fd9a4c4167b140869b558d60e98b8714f283dd394df2291bcb51"
+  },
+  "text_hashing": "sha256-utf8-bytes-crlf-to-lf-local-root-version-v1"
+}

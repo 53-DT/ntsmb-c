@@ -1,0 +1,475 @@
+#!/usr/bin/env python3
+"""The module-layer gate: rust-modules/src may only depend DOWN its target crate graph.
+
+`ci/module-layers.ini` declares the crates the app is to be split into ("layers"), which modules
+each one owns and which layers each may name. `ci/module_graph.py` reads every reference one
+module makes to another out of the Rust tokens. This script fails when
+
+  * the declared layer graph has a cycle, names an unknown layer, or lists a member that does not
+    exist or twice;
+  * a module of the crate belongs to no layer (a new top-level module must be placed);
+  * a reference — production or `cfg(test)` — names a layer its own layer does not `use`, and
+    ci/allow/layers.txt has no entry for that (file, member) pair;
+  * a reference from outside a PORT names one of its members, with no entry either. A
+    `[platform <name>]` section is a fence, not a layer, while it carries no `uses`: its members
+    stay placed in their layers, and the port fences one platform's code off from the rest
+    (docs/module-layers.md, step L15). Its entries do not hold up any layer's extraction. A platform
+    section that carries `uses` is the platform's own CRATE (`plx_platform_<name>`, W7b): one member,
+    the crate's mount, placed in a layer of its own named `platform <name>` that sits above `app`,
+    and still a port, so nothing outside names it. No `uses` can spell a platform, so no layer
+    names one, and a platform never names another;
+  * an allowlist entry no longer matches any such reference (the list only shrinks), or the
+    list's `# count:` line disagrees with its entries.
+
+So the module graph can get no more cyclic than it is today, and each entry removed from the
+allowlist is a step of docs/module-layers.md's plan landing. Exit 0 green, 1 on any failure.
+
+Not a failure, but counted on the green line and listed by `--report`: a `cfg(test)` reference
+that names a test-only module or `cfg(test)` item of ANOTHER layer. It is a legal name today, and
+after the split it is a name the dependent's tests cannot see, because a dependency is never built
+`cfg(test)`: each one needs a `test-support` feature on the provider, or the test moves.
+
+    ci/check-module-layers.py              # the gate (make check-python runs it)
+    ci/check-module-layers.py --report     # the remaining debt, grouped by layer edge and by
+                                           # port, and the cfg(test)-only items other layers'
+                                           # tests name
+    ci/check-module-layers.py --cycles     # strongly connected components of the module graph
+    ci/check-module-layers.py --prune      # rewrite the allowlist without its stale entries
+"""
+from pathlib import Path
+import argparse
+import collections
+import configparser
+import sys
+import tomllib
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import module_graph  # noqa: E402
+
+REPO = Path(__file__).resolve().parent.parent
+SRC_REL = 'rust-modules/src'
+ALLOW_HEADER = """\
+# count: {count}
+# The module-layer gate's MIGRATION list (ci/check-module-layers.py, docs/module-layers.md): one
+# entry per (file, member) where a file names a module in a layer its own layer may not use, as
+# `path<TAB>named member<TAB>plan step`. Every entry is a reference that must move before the
+# crate can be split along ci/module-layers.ini; the plan step says how. It only shrinks: a fixed
+# entry fails the gate as stale until removed (`ci/check-module-layers.py --prune` does that), and
+# a new upward reference fails it until the code is fixed — not until a line is added here. Lines
+# are added only by a design change that re-layers modules, or declares a port, that other code
+# already names: as the change's own new step, in the same diff as the ini (step L15). The one
+# re-keying allowed: a renamed or split file takes its entries to its new path in the same diff.
+"""
+
+
+class Layers:
+    def __init__(self, path):
+        parser = configparser.ConfigParser(interpolation=None, comment_prefixes=('#',),
+                                           inline_comment_prefixes=None)
+        parser.optionxform = str
+        with open(path, encoding='utf-8') as f:
+            parser.read_file(f)
+        self.order = [s for s in parser.sections() if not s.startswith('platform ')]
+        # A platform section with `uses` is one more layer, appended after the real ones: the crate
+        # above `app`. It is still a port below. No `uses` list can name it (the name has a space).
+        self.platform_layers = [s for s in parser.sections() if s.startswith('platform ') and 'uses' in parser[s]]
+        self.order += self.platform_layers
+        self.uses, self.members, self.errors = {}, {}, []
+        # A PORT is a set of members, still placed in their layers, that nothing outside the port
+        # may name: the boundary of one platform's code (docs/module-layers.md, step L15).
+        self.ports, self.port_members = {}, {}
+        for section in parser.sections():
+            if not section.startswith('platform '): continue
+            port = section[len('platform '):].strip()
+            unknown = set(parser[section]) - {'members', 'uses'}
+            if unknown: self.errors.append(f'[{section}] has unknown key(s) {sorted(unknown)}')
+            if section in self.platform_layers and len(parser[section].get('members', '').split()) != 1:
+                self.errors.append(f'[{section}] carries `uses`, so it is one crate: it must list exactly one '
+                                   f'member, the mount of its package')
+            self.ports[port] = []
+            for member in parser[section].get('members', '').split():
+                key = tuple(member.split('::'))
+                if key in self.port_members:
+                    self.errors.append(f'{member} is listed in [platform {self.port_members[key]}] and [{section}]')
+                self.ports[port].append(key)
+                self.port_members[key] = port
+        for layer in self.order:
+            section = parser[layer]
+            unknown = set(section) - {'uses', 'members'}
+            if unknown: self.errors.append(f'[{layer}] has unknown key(s) {sorted(unknown)}')
+            self.uses[layer] = section.get('uses', '').split()
+            for member in section.get('members', '').split():
+                key = tuple(member.split('::')) if member != 'crate' else ()
+                if key in self.members:
+                    self.errors.append(f'{member} is listed in [{self.members[key]}] and [{layer}]')
+                self.members[key] = layer
+        for layer, uses in self.uses.items():
+            for used in uses:
+                if used not in self.uses: self.errors.append(f'[{layer}] uses unknown layer {used}')
+                if used == layer: self.errors.append(f'[{layer}] uses itself')
+        adjacency = {layer: set(uses) & set(self.uses) for layer, uses in self.uses.items()}
+        for comp in module_graph.sccs(set(self.uses), adjacency):
+            if len(comp) > 1: self.errors.append(f'layer cycle: {" ".join(comp)}')
+
+    def member_of(self, module):
+        """The longest listed prefix of `module` (a tuple), or None. `crate` (the empty path) owns
+        lib.rs's own items only — it is never a catch-all for an unplaced module."""
+        for k in range(len(module), 0, -1):
+            if module[:k] in self.members: return module[:k]
+        return () if module == () and () in self.members else None
+
+    def port_of(self, module):
+        """(the longest port member prefixing `module`, its port), or None."""
+        for k in range(len(module), 0, -1):
+            if module[:k] in self.port_members: return module[:k], self.port_members[module[:k]]
+        return None
+
+
+def member_name(member):
+    return module_graph.name(member)
+
+
+def violations(crate, layers):
+    """{(file, member name): [Ref...]} for every reference that names a layer it may not use."""
+    found = collections.defaultdict(list)
+    for ref in crate.refs:
+        source, target = layers.member_of(ref.source), layers.member_of(ref.target)
+        if source is None or target is None: continue  # reported as unplaced
+        a, b = layers.members[source], layers.members[target]
+        if a != b and b not in layers.uses[a]:
+            found[(f'{SRC_REL}/{ref.file}', member_name(target))].append(ref)
+    return found
+
+
+def port_violations(crate, layers):
+    """{(file, port member name): [Ref...]} for every reference into a port from outside it."""
+    found = collections.defaultdict(list)
+    for ref in crate.refs:
+        target = layers.port_of(ref.target)
+        if target is None: continue
+        source = layers.port_of(ref.source)
+        if source is not None and source[1] == target[1]: continue
+        found[(f'{SRC_REL}/{ref.file}', member_name(target[0]))].append(ref)
+    return found
+
+
+def test_support(crate, layers):
+    """{provider layer: {item label: [Ref...]}} for every `cfg(test)` reference that names a
+    test-only module or `cfg(test)` item of a layer other than its own (`Crate.test_item_refs`)."""
+    found = collections.defaultdict(lambda: collections.defaultdict(list))
+    for ref, label, provider in crate.test_item_refs():
+        source, target = layers.member_of(ref.source), layers.member_of(provider)
+        if source is None or target is None: continue
+        a, b = layers.members[source], layers.members[target]
+        if a != b: found[b][label].append(ref)
+    return found
+
+
+def config_errors(crate, layers):
+    errors = list(layers.errors)
+    for member in layers.members:
+        if member not in crate.modules:
+            errors.append(f'{member_name(member)} is listed in [{layers.members[member]}] but is not a module of the crate')
+    for member, port in layers.port_members.items():
+        if member not in crate.modules:
+            errors.append(f'{member_name(member)} is listed in [platform {port}] but is not a module of the crate')
+    for module in sorted(crate.modules):
+        if layers.member_of(module) is None:
+            errors.append(f'module {member_name(module)} belongs to no layer: add it (or its top-level module) to ci/module-layers.ini')
+    return errors
+
+
+def cargo_package(doc):
+    """The package's name, not a dependency alias or feature name."""
+    return doc.get('package', {}).get('name')
+
+
+def cargo_mount(doc):
+    mount = doc.get('package', {}).get('metadata', {}).get('plx', {}).get('mount')
+    return tuple(mount.split('::')) if isinstance(mount, str) else None
+
+
+def cargo_declarations(doc):
+    """(alias, spec) for normal/build/dev and target-specific dependencies."""
+    kinds = ('dependencies', 'build-dependencies', 'dev-dependencies')
+    tables = [doc.get(kind, {}) for kind in kinds]
+    for target in doc.get('target', {}).values():
+        tables.extend(target.get(kind, {}) for kind in kinds)
+    for table in tables:
+        for alias, spec in table.items():
+            yield alias, spec if isinstance(spec, dict) else {}
+
+
+def cargo_edge_errors(src, layers):
+    """Declared local layer edges must be permitted by the same `uses` graph as Rust names.
+
+    The application root is the graph's top layer; split crates and the root package are checked
+    here even when a dependency is optional, test-only, target-specific or currently unused in
+    source. Workspace-inherited paths resolve from the workspace root. Fixtures without manifests
+    keep using the Rust-only pass.
+    """
+    workspace = Path(src).resolve().parent
+    root_manifest = workspace / 'Cargo.toml'
+    manifests = ([root_manifest] if root_manifest.is_file() else []) + sorted(workspace.glob('*/Cargo.toml'))
+    packages = {}
+    errors = []
+    workspace_deps = {}
+    if root_manifest.is_file():
+        try:
+            workspace_doc = tomllib.loads(root_manifest.read_text(encoding='utf-8'))
+            workspace_deps = workspace_doc.get('workspace', {}).get('dependencies', {})
+        except (OSError, ValueError) as error:
+            errors.append(f'{root_manifest}: invalid Cargo.toml: {error}')
+    for manifest in manifests:
+        if not (manifest.parent / 'src/lib.rs').is_file(): continue
+        try:
+            doc = tomllib.loads(manifest.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as error:
+            errors.append(f'{manifest}: invalid Cargo.toml: {error}')
+            continue
+        package = cargo_package(doc)
+        if package == 'plxnative-modules':
+            layer = 'app'
+        elif package and package.startswith('plx_'):
+            mount = cargo_mount(doc)
+            layer = layers.members.get(layers.member_of(mount)) if mount is not None else package.removeprefix('plx_')
+            # A platform crate and its layer name each other: `plx_platform_webos` is `[platform webos]`'s
+            # one member and nothing else's. Its mount is not optional, because without one its lib.rs
+            # would merge into the application's `crate` member of the module tree.
+            platform = package.removeprefix('plx_platform_') if package.startswith('plx_platform_') else None
+            if platform is not None and mount is None:
+                errors.append(f'{manifest}: platform package {package} declares no [package.metadata.plx] mount, so '
+                              f'its lib.rs would merge into the application\'s module tree')
+                continue
+            if (layer in layers.platform_layers) != (platform is not None) or \
+                    (platform is not None and layer != f'platform {platform}'):
+                errors.append(f'{manifest}: package {package} is mounted in [{layer}], but a platform crate '
+                              f'plx_platform_<name> is the one member of [platform <name>] and nothing else is')
+                continue
+        else:
+            continue
+        if layer not in layers.uses:
+            errors.append(f'{manifest}: package {package} has no recognized layer')
+        else:
+            packages[package] = (manifest, doc, layer)
+    edges = 0
+    for package, (manifest, doc, source) in packages.items():
+        for alias, spec in cargo_declarations(doc):
+            inherited = spec.get('workspace') is True
+            if inherited:
+                inherited_spec = workspace_deps.get(alias)
+                if inherited_spec is None:
+                    errors.append(f'{manifest}: {alias} inherits a missing [workspace.dependencies] entry')
+                    continue
+                spec = inherited_spec if isinstance(inherited_spec, dict) else {}
+            override, path = spec.get('package'), spec.get('path')
+            target_package = override or alias
+            if path:
+                base = workspace if inherited else manifest.parent
+                target_manifest = (base / path / 'Cargo.toml').resolve()
+                if not target_manifest.is_file():
+                    errors.append(f'{manifest}: {alias} path {path!r} has no Cargo.toml')
+                    continue
+                try:
+                    actual = cargo_package(tomllib.loads(target_manifest.read_text(encoding='utf-8')))
+                except (OSError, ValueError) as error:
+                    errors.append(f'{target_manifest}: invalid Cargo.toml: {error}')
+                    continue
+                if override and actual != override:
+                    errors.append(f'{manifest}: {alias} names package {override}, but path {path!r} holds {actual}')
+                    continue
+                target_package = actual
+            if target_package == package: continue  # a crate's test-support self dependency
+            if target_package not in packages:
+                if path and target_package and target_package.startswith('plx_'):
+                    errors.append(f'{manifest}: {alias} path {path!r} names unknown local layer package {target_package}')
+                continue  # crates.io / sysroot dependency
+            target = packages[target_package][2]
+            edges += 1
+            if target != source and target not in layers.uses[source]:
+                errors.append(f'{manifest}: {alias} declares [{source}] -> [{target}], '
+                              f'which [{source}] may not use in ci/module-layers.ini')
+    return errors, edges
+
+
+def read_allowlist(path):
+    """(declared count, {(path, member): reason}, [malformed lines])."""
+    declared, entries, bad = None, {}, []
+    if not path.exists(): return 0, entries, bad
+    for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+        if number == 1 and line.startswith('# count:'):
+            declared = int(line.split(':', 1)[1]); continue
+        if not line.strip() or line.lstrip().startswith('#'): continue
+        fields = line.split('\t')
+        if len(fields) != 3 or not all(fields):
+            bad.append(f'{path.name}:{number}: want path<TAB>member<TAB>plan step'); continue
+        key = (fields[0], fields[1])
+        if key in entries: bad.append(f'{path.name}:{number}: duplicate entry {fields[0]} {fields[1]}')
+        entries[key] = fields[2]
+    return declared, entries, bad
+
+
+def write_allowlist(path, entries):
+    lines = [ALLOW_HEADER.format(count=len(entries))]
+    for (file, member), reason in sorted(entries.items()):
+        lines.append(f'{file}\t{member}\t{reason}\n')
+    path.write_text(''.join(lines), encoding='utf-8')
+
+
+def describe(refs, limit=4):
+    shown = ', '.join(f'{r.file}:{r.line} {r.path}{" (test)" if r.test else ""}' for r in refs[:limit])
+    return shown + (f', +{len(refs) - limit} more' if len(refs) > limit else '')
+
+
+def report(crate, layers, found, allow, support, ported):
+    by_edge = collections.defaultdict(list)
+    for (file, member), refs in found.items():
+        source = layers.members[layers.member_of(refs[0].source)]
+        by_edge[(source, member)].append((file, refs))
+    production = sum(1 for refs in found.values() for r in refs if not r.test)
+    print(f'{len(found)} (file, member) entries, {sum(len(r) for r in found.values())} references '
+          f'({production} production)\n')
+    for (source, member), rows in sorted(by_edge.items(), key=lambda kv: (layers.order.index(kv[0][0]), kv[0][1])):
+        refs = [r for _, rs in rows for r in rs]
+        items = collections.Counter('::'.join(r.path.split('::')[:len(r.target) + 1]) for r in refs)
+        steps = sorted({allow.get((f, member), 'NEW').split(' ')[0] for f, _ in rows})
+        target = layers.members[layers.member_of(refs[0].target)]
+        print(f'[{source}] -> {member} [{target}]: {len(refs)} refs in {len(rows)} files ({", ".join(steps)})')
+        print('    ' + ', '.join(f'{k} x{v}' for k, v in items.most_common(6)))
+    for port, members in layers.ports.items():
+        names = {member_name(m) for m in members}
+        rows = {key: refs for key, refs in ported.items() if key[1] in names}
+        refs = [r for rs in rows.values() for r in rs]
+        production = sum(1 for r in refs if not r.test)
+        print(f'\nport {port}: {len(rows)} (file, member) entries, {len(refs)} references ({production} production) '
+              f'name {" ".join(sorted(names))} from outside the port. They do not hold up the split.')
+        by_layer = collections.defaultdict(list)
+        for (file, member), rs in rows.items():
+            by_layer[layers.members[layers.member_of(rs[0].source)]].append((file, member, rs))
+        for layer in layers.order:
+            for file, member, rs in sorted(by_layer.get(layer, ())):
+                items = collections.Counter('::'.join(r.path.split('::')[:len(r.target) + 1]) for r in rs)
+                print(f'    [{layer}] {file.removeprefix(SRC_REL + "/")} -> {member}: '
+                      + ', '.join(f'{k} x{v}' for k, v in items.most_common(4)))
+    items = sum(len(labels) for labels in support.values())
+    refs = sum(len(r) for labels in support.values() for r in labels.values())
+    print(f'\ncfg(test)-only items named from another layer\'s tests: {items} items, {refs} references.'
+          f'\nEach needs a `test-support` feature on its layer\'s crate, or the test that names it moves:')
+    for layer in layers.order:
+        labels = support.get(layer)
+        if not labels: continue
+        print(f'[{layer}] {len(labels)} items')
+        for label, rs in sorted(labels.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            users = sorted({layers.members[layers.member_of(r.source)] for r in rs}, key=layers.order.index)
+            print(f'    {label} x{len(rs)} from {" ".join(users)}')
+    # A layer can become its own crate once neither it nor anything below it names upward, and no
+    # other layer's tests name a cfg(test) item of it or of anything below it.
+    blocked = collections.Counter(layers.members[layers.member_of(refs[0].source)] for refs in found.values())
+    print('\nextractable as a crate (no entry here or in any layer it uses, transitively; and no cfg(test)\n'
+          'item of those layers named from another layer\'s tests):')
+    for layer in layers.order:
+        below, pending = set(), [layer]
+        while pending:
+            for used in layers.uses[pending.pop()]:
+                if used not in below: below.add(used); pending.append(used)
+        waiting = blocked[layer] + sum(blocked[b] for b in below)
+        tests = sum(len(support.get(b, ())) for b in below | {layer})
+        reasons = []
+        if waiting:
+            reasons.append(f'{blocked[layer]} own entr{"y" if blocked[layer] == 1 else "ies"}, {waiting - blocked[layer]} below')
+        if tests:
+            reasons.append(f'{tests} cfg(test) item{"" if tests == 1 else "s"} named across layers, here or below')
+        print(f'    {layer:10} ' + ('; '.join(reasons) or 'ready'))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--src', type=Path, default=REPO / SRC_REL)
+    parser.add_argument('--layers', type=Path, default=REPO / 'ci' / 'module-layers.ini')
+    parser.add_argument('--allow', type=Path, default=REPO / 'ci' / 'allow' / 'layers.txt')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--report', action='store_true', help='print the remaining debt by layer edge')
+    mode.add_argument('--cycles', action='store_true', help='print the module graph\'s cycles')
+    mode.add_argument('--prune', action='store_true', help='drop stale allowlist entries')
+    args = parser.parse_args(argv)
+
+    try:
+        crate = module_graph.Crate(args.src)
+        layers = Layers(args.layers)
+    except (ValueError, OSError, configparser.Error) as error:
+        print(f'::error::check-module-layers: {error}')
+        return 1
+    found = violations(crate, layers)
+    ported = port_violations(crate, layers)
+    named = set(found) | set(ported)
+    support = test_support(crate, layers)
+    declared, allow, malformed = read_allowlist(args.allow)
+
+    if args.cycles:
+        # Nodes are the config's members — the units the split moves — so `diag::scrub` and the
+        # rest of `diag` are two nodes, not one. An unplaced module stands for itself.
+        def unit(module):
+            member = layers.member_of(module)
+            return module_graph.name(member if member is not None else module[:1])
+        for include_test in (False, True):
+            adjacency, nodes = collections.defaultdict(set), set()
+            for ref in crate.refs:
+                if ref.test and not include_test: continue
+                a, b = unit(ref.source), unit(ref.target)
+                nodes |= {a, b}
+                if a != b: adjacency[a].add(b)
+            cycles = [c for c in module_graph.sccs(nodes, adjacency) if len(c) > 1]
+            label = 'with cfg(test)' if include_test else 'production'
+            print(f'{label}: ' + ('; '.join(f'{len(c)} of {len(nodes)} units: {" ".join(c)}' for c in cycles) or 'acyclic'))
+        return 0
+    if args.report:
+        report(crate, layers, found, allow, support, ported)
+        return 0
+    if args.prune:
+        kept = {key: reason for key, reason in allow.items() if key in named}
+        write_allowlist(args.allow, kept)
+        print(f'check-module-layers: pruned {len(allow) - len(kept)} stale entr(y/ies), {len(kept)} remain')
+        return 0
+
+    cargo_errors, cargo_edges = cargo_edge_errors(args.src, layers)
+    errors = config_errors(crate, layers) + malformed + cargo_errors
+    for key, refs in sorted(found.items()):
+        if key not in allow:
+            file, member = key
+            source = layers.members[layers.member_of(refs[0].source)]
+            target = layers.members[layers.member_of(refs[0].target)]
+            errors.append(f'{file} names {member} ([{target}]), which [{source}] may not use: {describe(refs)}')
+    for key, refs in sorted(ported.items()):
+        if key not in allow and key not in found:
+            file, member = key
+            port = layers.port_of(refs[0].target)[1]
+            errors.append(f'{file} names {member} from outside [platform {port}], which only the port itself may '
+                          f'name: {describe(refs)}')
+    for key in sorted(set(allow) - named):
+        errors.append(f'stale allowlist entry {key[0]}\t{key[1]} — it no longer names that layer or port; '
+                      f'remove it (ci/check-module-layers.py --prune), or, if the file was renamed or '
+                      f'split, move the entry to the new path')
+    if declared != len(allow) + len(malformed):
+        errors.append(f'{args.allow.name} declares count {declared} but has {len(allow) + len(malformed)} entries')
+
+    for error in errors:
+        print(f'::error::check-module-layers: {error}')
+    if errors:
+        print(f'check-module-layers: {len(errors)} failure(s). A reference may only name its own layer or one '
+              f'it `uses` in ci/module-layers.ini, and never a port it is outside; see docs/module-layers.md '
+              f'for where code belongs.')
+        return 1
+    where = args.allow.relative_to(REPO) if args.allow.is_relative_to(REPO) else args.allow
+    ports = ''.join(f', {sum(1 for key in ported if key[1] in {member_name(m) for m in members})} of them '
+                    f'into [platform {port}]' for port, members in layers.ports.items())
+    crates = f' and {len(layers.platform_layers)} platform crates' if layers.platform_layers else ''
+    print(f'check-module-layers: green — {len(layers.order) - len(layers.platform_layers)} layers{crates}, '
+          f'{len(crate.modules)} modules, '
+          f'{cargo_edges} Cargo layer declarations, '
+          f'{len(allow)} migration entries left in {where}{ports}; '
+          f'{sum(len(labels) for labels in support.values())} cfg(test) items still named across layers (--report)')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

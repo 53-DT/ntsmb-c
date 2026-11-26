@@ -1,0 +1,42 @@
+name: SMB development build
+
+# Builds the current development branch into a separately installable debug IPK for TV testing.
+# Keep this workflow path-triggered so SMB transport and diagnostic changes always produce a TV-testable package.
+
+on:
+  push:
+    branches: [smb-development, 0.0.1b-smb-browser, smb-connect-wip, 0.1.0-tweaks]
+    paths:
+      - ".gitignore"
+      - ".github/workflows/smb-build.yml"
+      - ".github/workflows/build-package.yml"
+      - "Makefile"
+      - "pkg/**"
+      - "ipkroot/**"
+      - "rust-modules/**"
+      - "ci/**"
+      - "vendor/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smb-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-package.yml
+    with:
+      ref: ${{ github.sha }}
+      flavor: debug
+      telemetry: none
+      smb-smoke: true
+      artifact: smb-webos-debug-ipk-0.0.2b
+      source-asset: false
+      lgpl-ffmpeg-source: true
+      caches: true
+      fwcompat: true
+      upload-debug-files: false
+      sentry-release: false
