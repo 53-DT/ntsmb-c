@@ -160,6 +160,7 @@ fn consume_worker_events(
             WorkerEvent::Prepared(Ok(PreparedSourcePlay::Smb { prepared, .. })) => {
                 *current_title = prepared.file_name.clone();
                 adapter.set_external_playback(prepared.play, prepared.bridge);
+                plx_media::route::clear_url(&mut player.session);
                 if player::start_playback(&mut player.session, adapter) {
                     app.page = DeckFilesPage::Player;
                     update_player_snapshot(app, player, current_title);
