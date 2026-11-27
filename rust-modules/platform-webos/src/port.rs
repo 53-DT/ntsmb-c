@@ -286,7 +286,7 @@ fn plex_main(pms_host: *const c_char, pms_port: c_int) -> ! {
     let host = unsafe { std::ffi::CStr::from_ptr(pms_host) };
     let port = u16::try_from(pms_port).expect("PMS_PORT is a TCP port");
     let _ = (host, port);
-    PLATFORM.install_services();
+    host::install_services(&PLATFORM);
     plx_base::process::exit_now(crate::deckfiles::run(&WebosShell).code)
 }
 

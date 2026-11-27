@@ -549,7 +549,7 @@ pub(crate) fn run_application(platform: &'static platform::Platform, pms_host: *
     // capability probe, telemetry) just as a played session does, so `exit::entry` leaks the `App`.
     // Ending the process is the entry's (`port::plex_run` on the television, the simulator's `main` after
     // `plx_platform_desktop::run` on a desktop); a hosted entry never does.
-    platform.install_services(); // once, before anything below reads `tv`
+    crate::host::install_services(platform); // once, before anything below reads `tv`
     exit::entry(|| enter_application(platform, pms_host, pms_port), |app| unsafe { run_and_shutdown(app) })
 }
 

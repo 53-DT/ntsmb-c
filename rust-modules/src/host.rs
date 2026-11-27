@@ -4,7 +4,7 @@
 //! The application's modules are private (`mod app;`), so a crate that is a sibling of this one cannot
 //! name `app::Platform` or implement a crate-private `Shell`. This is the one narrow public face: re-exports
 //! of the types a platform builds or implements, an [`EventSink`] through which it reports input, the two SDL
-//! helpers an SDL platform's `Shell` is built from ([`sdl_init`], [`sdl_open`], with [`InitHooks`]), the hosted contract's exit types, [`run`], the
+//! helpers an SDL platform's `Shell` is built from ([`sdl_init`], [`sdl_open`], with [`InitHooks`]), the hosted contract's exit types, [`install_services`] for a platform-owned standalone entry, [`run`], the
 //! entry for a host with a fixed server, [`run_signed_out`] for a host without one, and the ready media values
 //! described below. No other module of the
 //! application is public to a television build. A `sim` build also keeps the simulator binary's own doors,
@@ -386,7 +386,7 @@ mod surface_pin_tests {
     /// removed; empty for none). The first groups are the interface of a platform's own types and entry; the media values
     /// and the simulator's sink are there because the application keeps the playback composition until W11a, which retires
     /// each of them (`docs/platform-ports.md`, Target shape 8 and W7).
-    const HOST_ITEMS: [(&str, &str); 39] = [
+    const HOST_ITEMS: [(&str, &str); 40] = [
         // What a platform builds, implements and reports input through, and the entry that boots it.
         ("Platform", ""),
         ("Shell", ""),
@@ -404,6 +404,7 @@ mod surface_pin_tests {
         ("Services", ""),
         ("run", ""),
         ("run_signed_out", ""),
+        ("install_services", ""),
         // The hosted contract's exit half: a hosted platform's callbacks, its stop and its watchdog go through these. They
         // are the application's own types and stay (they do not retire); the C ABI that drives them is the platform's.
         ("HostGate", ""),
