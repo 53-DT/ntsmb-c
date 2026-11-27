@@ -18,7 +18,7 @@ use plx_os::storage::deck_vault::{
     SubtitleSize, SubtitlesMode,
 };
 use plx_smb::provider::{
-    ConnectPayload, PreparedSourcePlay, SourceProvider, SourceRegistry,
+    ConnectPayload, PreparedSourcePlay, SourceRegistry,
 };
 
 /// The state shared by the Files, Add Source, Settings and Player surfaces.
