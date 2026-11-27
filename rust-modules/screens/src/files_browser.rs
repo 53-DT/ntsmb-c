@@ -22,7 +22,7 @@ pub struct FilesBrowserScreen {
 impl Default for FilesBrowserScreen { fn default() -> Self { Self::new() } }
 impl FilesBrowserScreen {
     pub fn new() -> Self { Self { sources: Vec::new(), active_source: None, current_path: String::new(),
-        entries: Vec::new(), selected: 0, mode: BrowserMode::Grid, search: String::new(),
+        entries: Vec::new(), selected: 0, mode: BrowserMode::List, search: String::new(),
         loading: false, error: None, select_mode: false, history: Vec::new() } }
     pub fn set_sources(&mut self, sources: Vec<SourceItem>) {
         self.sources = sources;
