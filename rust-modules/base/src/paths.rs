@@ -1320,7 +1320,7 @@ mod tests {
                 Some("/also/anywhere".into()),
                 super::STABLE_APP_ID
             ),
-            std::path::Path::new("/tmp/io.github.tiper.finnative")
+            std::path::Path::new("/tmp/io.github.53-dt.deckfiles")
         );
     }
 
