@@ -239,26 +239,15 @@ impl DeckFilesApp {
                     },
                     SourceProviderChoice::GoogleDrive => None,
                 };
-                if let Some(target) = target { if !(self.add_source.draft.provider == SourceProviderChoice::Smb && self.add_source.draft.guest && field == 5) { target.push_str(&value); } }
-                if self.add_source.draft.provider == SourceProviderChoice::Smb && field == 2 {
-                    let mut port = self.add_source.draft.port.to_string(); port.push_str(&value);
-                    if let Ok(parsed) = port.parse::<u16>() { self.add_source.draft.port = parsed; }
-                }
+                if let Some(target) = target { if !(self.add_source.draft.provider == SourceProviderChoice::Smb && self.add_source.draft.guest && field == 3) { target.push_str(&value); } }
                 self.add_source.error = None;
             }
             DeckFilesInput::Backspace if self.page == DeckFilesPage::AddSource => {
                 let field = self.add_source.focused_field;
-                if self.add_source.draft.provider == SourceProviderChoice::Smb && field == 2 {
-                    let mut port = self.add_source.draft.port.to_string();
-                    port.pop();
-                    if port.is_empty() { port = "0".into(); }
-                    if let Ok(parsed) = port.parse::<u16>() { self.add_source.draft.port = parsed; }
-                }
                 let target = match self.add_source.draft.provider {
                     SourceProviderChoice::Smb => match field {
                         0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.host),
-                        3 => Some(&mut self.add_source.draft.share), 4 => Some(&mut self.add_source.draft.username),
-                        5 => Some(&mut self.add_source.draft.password), _ => None,
+                        2 => Some(&mut self.add_source.draft.username), 3 => Some(&mut self.add_source.draft.password), _ => None,
                     },
                     SourceProviderChoice::Local => match field {
                         0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.local_folder), _ => None,
@@ -320,7 +309,11 @@ impl DeckFilesApp {
                 DeckFilesPage::Player => {},
             },
             DeckFilesInput::Back => match self.page {
-                DeckFilesPage::AddSource => { self.add_source.cancel(); self.page = DeckFilesPage::Files; }
+                DeckFilesPage::AddSource => {
+                    if self.add_source.state==deckfiles_screens::add_source_modal::ConnectState::SelectingShare {
+                        self.add_source.return_to_form();
+                    } else { self.add_source.cancel(); self.page = DeckFilesPage::Files; }
+                }
                 DeckFilesPage::Settings | DeckFilesPage::Player => { self.page = DeckFilesPage::Files; self.remote.focus_content(); },
                 DeckFilesPage::Files => {},
             },
