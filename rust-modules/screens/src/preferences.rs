@@ -351,6 +351,7 @@ impl Txn {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Shared FinNative row identities not exposed by the NT-SMB field lists.
 enum RowId { Field(PickerKind), PlayerHud, Retry }
 impl FormId for RowId {
     /// Hand-assigned, per page: each field's position in ITS page's list (what its table index was
@@ -411,6 +412,7 @@ impl FormId for RowId {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Retry remains part of the shared account-preferences action model.
 enum Action { Open, Retry }
 
 struct State {
@@ -697,8 +699,7 @@ fn field_readout(field: PickerKind, quality: Quality, direct_play: DirectPlayMod
         PickerKind::SubtitleSize => subtitle_size_label(local.preference::<SubtitleSizePref>()).into(),
         PickerKind::SubtitlePosition => subtitle_position_label(local.preference::<SubtitlePositionPref>()).into(),
         PickerKind::SubtitleColor => subtitle_tone_label(local.preference::<SubtitleTonePref>()).into(),
-        PickerKind::HdrOverlay => hdr_overlay_label(local.preference::<HdrOverlayBrightnessPref>()).into(),
-        _ => {
+        PickerKind::HdrOverlay => hdr_overlay_label(local.preference::<HdrOverlayBrightnessPref>()).into(),        _ => {
             let current = resolve_value(field, quality, direct_play, prefs, local);
             field_options(field, quality, direct_play, prefs).into_iter().find(|(_, v)| *v == current)
                 .map_or_else(|| plx_os::i18n::msg::settings_audio_not_set().into(), |(s, _)| s)
@@ -707,6 +708,7 @@ fn field_readout(field: PickerKind, quality: Quality, direct_play: DirectPlayMod
 }
 
 /// The inputs [`field_form`] builds a `Kind`'s field list from, so the builder reads no global.
+#[allow(dead_code)] // Account-loading inputs are unused by NT-SMB's local-only preference pages.
 struct FieldListInputs<'a> {
     local: &'a crate::registry::ScreenInputs,
     kind: Kind,
