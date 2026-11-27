@@ -71,18 +71,19 @@ impl FilesBrowserScreen {
         self.current_path.clear(); self.entries.clear(); self.history.clear(); self.selected = 0;
         self.loading = false; self.error = None; self.search.clear();
     }
-    pub fn draw(&self, p: Painter, r: Rect) {
+    pub fn draw(&self, p: Painter, r: Rect) { self.draw_with_focus(p, r, None); }
+    pub fn draw_with_focus(&self, p: Painter, r: Rect, sidebar_focus: Option<usize>) {
         let side = Rect::new(r.x,r.y,300.0,r.h);
         let main = Rect::new(r.x+300.0,r.y,(r.w-300.0).max(0.0),r.h);
         p.rrect(side,0.0,0.0,theme::DECKFILES_SIDEBAR); p.rrect(main,0.0,0.0,theme::DECKFILES_CANVAS);
-        TextView::new("Files",theme::size::HEADLINE,theme::TEXT_PRIMARY).draw(p,Rect::new(side.x+28.0,side.y+30.0,240.0,48.0));
-        TextView::new("Settings",theme::size::BODY,theme::TEXT_SECONDARY).draw(p,Rect::new(side.x+28.0,side.y+92.0,240.0,42.0));
+        for (i,(label,y,h)) in [("Files",30.0,48.0),("Settings",92.0,42.0)].iter().enumerate() { let hot=sidebar_focus==Some(i); if hot { p.rrect(Rect::new(side.x+12.0,side.y+*y-4.0,276.0,*h),8.0,8.0,theme::CONTROL_IDLE_FILL); } TextView::new(label,if i==0{theme::size::HEADLINE}else{theme::size::BODY},if hot{theme::ACCENT_INK}else{theme::TEXT_SECONDARY}).draw(p,Rect::new(side.x+28.0,side.y+*y,240.0,*h)); }
         TextView::new("SOURCES",theme::size::MICRO,theme::TEXT_TERTIARY).draw(p,Rect::new(side.x+28.0,side.y+166.0,240.0,32.0));
-        TextView::new("+ Add source",theme::size::CAPTION,theme::TEXT_PRIMARY).draw(p,Rect::new(side.x+28.0,side.y+206.0,240.0,38.0));
+        if sidebar_focus==Some(2) { p.rrect(Rect::new(side.x+12.0,side.y+202.0,276.0,42.0),8.0,8.0,theme::CONTROL_IDLE_FILL); }
+        TextView::new("+ Add source",theme::size::CAPTION,if sidebar_focus==Some(2){theme::ACCENT_INK}else{theme::TEXT_PRIMARY}).draw(p,Rect::new(side.x+28.0,side.y+206.0,240.0,38.0));
         for (i,s) in self.sources.iter().enumerate() {
             let y=side.y+260.0+i as f32*52.0; let active=self.active_source.as_deref()==Some(s.id.as_str());
-            if active { p.rrect(Rect::new(side.x+12.0,y-4.0,276.0,46.0),8.0,8.0,theme::CONTROL_IDLE_FILL); }
-            TextView::new(&s.label,theme::size::CAPTION,if active {theme::ACCENT_INK}else{theme::TEXT_SECONDARY}).draw(p,Rect::new(side.x+28.0,y,244.0,36.0));
+            if active || sidebar_focus==Some(i+3) { p.rrect(Rect::new(side.x+12.0,y-4.0,276.0,46.0),8.0,8.0,theme::CONTROL_IDLE_FILL); }
+            TextView::new(&s.label,theme::size::CAPTION,if active || sidebar_focus==Some(i+3) {theme::ACCENT_INK}else{theme::TEXT_SECONDARY}).draw(p,Rect::new(side.x+28.0,y,244.0,36.0));
         }
         let crumb=self.breadcrumb().join("  ›  ");
         TextView::new(&crumb,theme::size::BODY,theme::TEXT_PRIMARY).draw(p,Rect::new(main.x+36.0,main.y+26.0,main.w-72.0,48.0));
