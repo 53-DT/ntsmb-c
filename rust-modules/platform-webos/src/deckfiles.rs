@@ -88,6 +88,9 @@ fn update_player_snapshot(app: &mut DeckFilesApp, player: &Player, title: &str) 
 fn handle_key(app: &mut DeckFilesApp, key: Key, player: &mut Player, adapter: &mut PlayerAdapter) -> Option<DeckFilesAction> {
     if app.page == DeckFilesPage::Player {
         use deckfiles_screens::deck_player::{PlayerAction, PlayerKey};
+        // Dedicated transport keys keep their literal meaning; only PLAY/PAUSE is a toggle.
+        if key == Key::Play { let _ = player::resume(&mut player.session, adapter); app.player.snapshot.paused=false; return None; }
+        if key == Key::Pause { let _ = player::pause(&mut player.session, adapter); app.player.snapshot.paused=true; return None; }
         let player_key = match key {
             Key::Up => PlayerKey::Up,
             Key::Down => PlayerKey::Down,
@@ -95,15 +98,14 @@ fn handle_key(app: &mut DeckFilesApp, key: Key, player: &mut Player, adapter: &m
             Key::Right { .. } => PlayerKey::Right,
             Key::Ok => PlayerKey::Ok,
             Key::Back => PlayerKey::Back,
-            Key::Play | Key::PlayPause => PlayerKey::PlayPause,
-            Key::Pause => PlayerKey::PlayPause,
+            Key::PlayPause => PlayerKey::PlayPause,
             Key::Stop => PlayerKey::Back,
             _ => return None,
         };
         if let Some(action) = app.player.handle_key(player_key) {
             match action {
-                PlayerAction::Play => { let _ = player::resume(&mut player.session, adapter); }
-                PlayerAction::Pause => { let _ = player::pause(&mut player.session, adapter); }
+                PlayerAction::Play => { let _ = player::resume(&mut player.session, adapter); app.player.snapshot.paused=false; }
+                PlayerAction::Pause => { let _ = player::pause(&mut player.session, adapter); app.player.snapshot.paused=true; }
                 PlayerAction::Seek(time) => {
                     let ns = (time.as_millis().min(i64::MAX as u64 / 1_000_000) as i64) * 1_000_000;
                     player::request_seek(&mut player.session, adapter, ns);
@@ -115,8 +117,6 @@ fn handle_key(app: &mut DeckFilesApp, key: Key, player: &mut Player, adapter: &m
                 }
                 _ => {}
             }
-        } else if key == Key::Pause {
-            let _ = player::pause(&mut player.session, adapter);
         }
         return None;
     }
