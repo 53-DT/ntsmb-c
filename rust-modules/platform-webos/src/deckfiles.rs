@@ -299,8 +299,12 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
         unsafe { glViewport(vx, vy, vw, vh); }
         plx_gfx::text::begin_frame();
         plx_gfx::gfx::straighten::frame_begin();
-        let (r, g, b) = plx_ui::theme::CLEAR_RGB;
-        plx_gfx::gfx::frame_clear(r, g, b);
+        if player.video_plane_bound {
+            plx_gfx::gfx::frame_clear_through();
+        } else {
+            let (r, g, b) = plx_ui::theme::CLEAR_RGB;
+            plx_gfx::gfx::frame_clear(r, g, b);
+        }
         app.draw(Painter::root(), Rect::new(0.0, 0.0, 1920.0, 1080.0));
         plx_gfx::gfx::straighten::straighten_surface(player.video_plane_bound);
         shell.opaque_route(player.video_plane_bound);
