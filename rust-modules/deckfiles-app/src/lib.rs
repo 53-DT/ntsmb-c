@@ -17,12 +17,18 @@ use plx_os::storage::deck_vault::{
     HudAutoHide, RecoverySettings, SkipInterval, SourceKind, SubtitleColor, SubtitlePosition,
     SubtitleSize, SubtitlesMode,
 };
-use plx_smb::provider::{
+use plx_smb::provider{
     ConnectPayload, PreparedSourcePlay, SourceRegistry,
 };
+use plx_ui::{Painter, Rect};
+
+/// Which DeckFiles surface is currently visible.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeckFilesPage { #[default] Files, AddSource, Settings, Player }
 
 /// The state shared by the Files, Add Source, Settings and Player surfaces.
 pub struct DeckFilesApp {
+    pub page: DeckFilesPage,
     pub vault: DeckVault,
     providers: SourceRegistry,
     pub files: FilesBrowserScreen,
@@ -43,6 +49,7 @@ impl DeckFilesApp {
         let credentials = credential_items(&vault);
         let mut app = Self {
             vault,
+            page: DeckFilesPage::Files,
             providers: SourceRegistry::new(),
             files: FilesBrowserScreen::new(),
             add_source: AddSourceModal::new(),
@@ -51,6 +58,16 @@ impl DeckFilesApp {
         };
         app.refresh_sources();
         app
+    }
+
+    /// Draw the currently selected DeckFiles surface.
+    pub fn draw(&self, painter: Painter, bounds: Rect) {
+        match self.page {
+            DeckFilesPage::Files => self.files.draw(painter, bounds),
+            DeckFilesPage::AddSource => self.add_source.draw(painter, bounds),
+            DeckFilesPage::Settings => self.settings.draw(painter, bounds),
+            DeckFilesPage::Player => self.player.draw(painter, bounds),
+        }
     }
 
     /// Refresh the source rail and the credentials page from the provider-neutral vault.
