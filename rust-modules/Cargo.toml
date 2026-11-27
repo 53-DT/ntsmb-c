@@ -29,6 +29,8 @@ members = [
     "screens",
     "shell-sdl",
     "owp",
+    "deckfiles-screens",
+    "deckfiles-app",
     "platform-webos",
     "platform-desktop",
     "platform-tizen",
