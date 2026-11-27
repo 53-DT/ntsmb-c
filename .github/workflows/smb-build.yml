@@ -5,7 +5,7 @@ name: SMB development build
 
 on:
   push:
-    branches: [smb-development, 0.0.1b-smb-browser, smb-connect-wip, 0.1.0-tweaks]
+    branches: [smb-development, 0.0.1b-smb-browser, smb-connect-wip, 0.1.0-tweaks, deckfiles-rust-standalone]
     paths:
       - ".gitignore"
       - ".github/workflows/smb-build.yml"
