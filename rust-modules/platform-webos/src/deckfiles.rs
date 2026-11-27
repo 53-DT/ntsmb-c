@@ -247,6 +247,9 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
     plx_gfx::gfx::init_blur();
 
     (host::WEBOS_MEDIA.early_init)(&mt);
+    plx_media_codecs::ffi::boot();
+    #[cfg(feature = "play-feed")]
+    plx_play_feed::publish_audio_converter();
     let mut adapter = PlayerAdapter::new(mt);
     let composition = (host::WEBOS_MEDIA.compose)(&mut adapter, false);
     let mut player = Player::new();
