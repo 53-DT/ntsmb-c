@@ -1200,7 +1200,3 @@ pub mod backend;
 #[path = "../storage_service/keymanager.rs"]
 pub mod keymanager;
 
-/// Provider-neutral DeckFiles vault. This is intentionally separate from the LS2 storage daemon.
-pub mod deck_vault {
-    pub use crate::deck_vault::*;
-}
