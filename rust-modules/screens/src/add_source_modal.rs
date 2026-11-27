@@ -99,7 +99,7 @@ impl AddSourceModal {
             let registry = SourceRegistry::new();
             let result = registry.get(kind)
                 .ok_or_else(|| "This provider is not available yet".to_string())
-                .and_then(|provider| provider.connect(&payload, &mut { vault }));
+                .and_then(|provider| provider.connect(&payload, &mut vault));
             // The worker returns the vault in both success and failure cases.
             // connect() persists only after a successful provider validation.
             let _ = tx.send((vault, result));
@@ -149,8 +149,8 @@ impl AddSourceModal {
                 .draw(painter, Rect::new(bounds.x + 42.0, bounds.y + 270.0 + index as f32 * 42.0, bounds.w - 84.0, 36.0));
         }
         if let Some(error) = &self.error {
-            painter.rrect(Rect::new(bounds.x + 36.0, bounds.y + bounds.h - 132.0, bounds.w - 72.0, 46.0), 8.0, 8.0, theme::STATUS_ERROR_BG);
-            TextView::new(error, theme::size::CAPTION, theme::STATUS_ERROR)
+            painter.rrect(Rect::new(bounds.x + 36.0, bounds.y + bounds.h - 132.0, bounds.w - 72.0, 46.0), 8.0, 8.0, theme::CONTROL_DANGER_IDLE_FILL);
+            TextView::new(error, theme::size::CAPTION, theme::DANGER)
                 .draw(painter, Rect::new(bounds.x + 52.0, bounds.y + bounds.h - 126.0, bounds.w - 104.0, 34.0));
         }
         let footer = match self.state { ConnectState::Connecting => "Connecting…", ConnectState::Connected => "Connected", ConnectState::Editing => "Back     Cancel     Connect" };

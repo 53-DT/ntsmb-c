@@ -49,37 +49,37 @@ impl DeckSettingsScreen {
         self.selected_row = (self.selected_row as isize + delta).clamp(0, count as isize - 1) as usize;
     }
 
-    pub fn rows(&self) -> Vec<(&'static str, String)> {
+    pub fn rows(&self) -> Vec<(String, String)> {
         use plx_os::storage::deck_vault::*;
         match self.selected_root {
             SettingsRoot::Playback => vec![
-                ("Skip interval", format!("{} seconds", self.settings.playback.skip_interval_sec.seconds())),
-                ("Instant D-pad seeking", on_off(self.settings.playback.instant_dpad_seeking)),
-                ("HDR overlay brightness", match self.settings.playback.hdr_overlay_brightness { HdrOverlayBrightness::Fifty => "50%".into(), HdrOverlayBrightness::SeventyFive => "75%".into(), HdrOverlayBrightness::OneHundred => "100%".into() }),
-                ("Show remaining time", on_off(self.settings.playback.hud_show_remaining)),
-                ("HUD auto-hide", match self.settings.playback.hud_auto_hide_sec { HudAutoHide::Three => "3 seconds".into(), HudAutoHide::Five => "5 seconds".into(), HudAutoHide::Eight => "8 seconds".into() }),
-                ("Compact HUD", on_off(self.settings.playback.hud_compact)),
-                ("Continuously play next", on_off(self.settings.playback.continuously_play_next)),
+                ("Skip interval".into(), format!("{} seconds", self.settings.playback.skip_interval_sec.seconds())),
+                ("Instant D-pad seeking".into(), on_off(self.settings.playback.instant_dpad_seeking)),
+                ("HDR overlay brightness".into(), match self.settings.playback.hdr_overlay_brightness { HdrOverlayBrightness::Fifty => "50%".into(), HdrOverlayBrightness::SeventyFive => "75%".into(), HdrOverlayBrightness::OneHundred => "100%".into() }),
+                ("Show remaining time".into(), on_off(self.settings.playback.hud_show_remaining)),
+                ("HUD auto-hide".into(), match self.settings.playback.hud_auto_hide_sec { HudAutoHide::Three => "3 seconds".into(), HudAutoHide::Five => "5 seconds".into(), HudAutoHide::Eight => "8 seconds".into() }),
+                ("Compact HUD".into(), on_off(self.settings.playback.hud_compact)),
+                ("Continuously play next".into(), on_off(self.settings.playback.continuously_play_next)),
             ],
             SettingsRoot::AudioSubtitles => vec![
-                ("Preferred audio language", self.settings.audio_subtitles.preferred_audio_lang.clone()),
-                ("Subtitles", format!("{:?}", self.settings.audio_subtitles.subtitles_mode)),
-                ("Subtitle language", self.settings.audio_subtitles.subtitle_lang.clone()),
-                ("Forced subtitles", format!("{:?}", self.settings.audio_subtitles.forced_subtitles)),
-                ("Subtitle size", format!("{:?}", self.settings.audio_subtitles.subtitle_size)),
-                ("Subtitle position", format!("{:?}", self.settings.audio_subtitles.subtitle_position)),
-                ("Subtitle color", format!("{:?}", self.settings.audio_subtitles.subtitle_color)),
+                ("Preferred audio language".into(), self.settings.audio_subtitles.preferred_audio_lang.clone()),
+                ("Subtitles".into(), format!("{:?}", self.settings.audio_subtitles.subtitles_mode)),
+                ("Subtitle language".into(), self.settings.audio_subtitles.subtitle_lang.clone()),
+                ("Forced subtitles".into(), format!("{:?}", self.settings.audio_subtitles.forced_subtitles)),
+                ("Subtitle size".into(), format!("{:?}", self.settings.audio_subtitles.subtitle_size)),
+                ("Subtitle position".into(), format!("{:?}", self.settings.audio_subtitles.subtitle_position)),
+                ("Subtitle color".into(), format!("{:?}", self.settings.audio_subtitles.subtitle_color)),
             ],
             SettingsRoot::Credentials => self.sources.iter().map(|source| {
                 let credential = if source.kind == SourceKind::Smb && !source.guest {
                     if source.has_saved_credential { "Credential sealed" } else { "Credential not saved" }
                 } else { "No credential required" };
-                (source.label.as_str(), credential.to_string())
-            }).map(|(label, value)| (Box::leak(label.to_owned().into_boxed_str()) as &'static str, value)).collect(),
+                (source.label.clone(), credential.to_string())
+            }).collect(),
             SettingsRoot::Recovery => vec![
-                ("Auto-recover video errors", on_off(self.settings.recovery.auto_recover_video_errors)),
-                ("Prefer remux containers", on_off(self.settings.recovery.prefer_remux_containers)),
-                ("Sandbox video-plane rebind", on_off(self.settings.recovery.sandbox_plane_rebind)),
+                ("Auto-recover video errors".into(), on_off(self.settings.recovery.auto_recover_video_errors)),
+                ("Prefer remux containers".into(), on_off(self.settings.recovery.prefer_remux_containers)),
+                ("Sandbox video-plane rebind".into(), on_off(self.settings.recovery.sandbox_plane_rebind)),
             ],
         }
     }
