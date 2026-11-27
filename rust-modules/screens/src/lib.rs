@@ -12,6 +12,9 @@
 //! mounter's one match are `registry`'s since that phase; what is left in `app/bridge.rs` is the
 //! concrete host and the rig it lends the dispatcher.
 
+pub mod files_browser;
+pub mod add_source_modal;
+pub mod deck_settings;
 pub mod about_panel;
 pub mod account_menu;
 pub mod alt_sources;

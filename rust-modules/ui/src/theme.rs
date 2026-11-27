@@ -519,6 +519,13 @@ pub const CONTROL_CAST_FOCUS: [(f32, f32, f32); 2] = [(5.0, 32.0, 0.34), (1.0, 6
 /// Flat shelf/app base (both gradient stops) — Apple TV's shelf gray **#2C2C2E (44,44,46)**. A
 /// MEDIUM gray, deliberately not near-black: the focused-card drop-shadow only reads against a base
 /// this light (on the old near-black 25,25,29 a black shadow had almost nothing to darken).
+/// DeckFiles' near-black browsing canvas (#09090b).
+pub const DECKFILES_CANVAS: [f32; 4] = rgb8(0x09, 0x09, 0x0b);
+/// DeckFiles' source rail (#141416).
+pub const DECKFILES_SIDEBAR: [f32; 4] = NEUTRAL_850;
+/// DeckFiles' settings ground (#1c1c1e).
+pub const DECKFILES_SETTINGS: [f32; 4] = NEUTRAL_750;
+
 pub const SURFACE_APP: [f32; 4] = NEUTRAL_500;
 /// Opaque sheet drawn over the hardware video plane when a detail page scrolls the hero away.
 /// Same stop as [`SURFACE_APP`] so the rising page and the cover are one surface. Different role:
