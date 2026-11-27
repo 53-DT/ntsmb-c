@@ -2,16 +2,16 @@
   {
     "name": "stable",
     "app_id": "io.github.davetrump53ai.deckfiles",
-    "object_id": "deckfiles.stable"
+    "object_id": "deckfiles"
   },
   {
     "name": "debug",
     "app_id": "io.github.davetrump53ai.deckfiles.debug",
-    "object_id": "deckfiles.debug"
+    "object_id": "deckfilesdbg"
   },
   {
     "name": "nightly",
     "app_id": "io.github.davetrump53ai.deckfiles.nightly",
-    "object_id": "deckfiles.nightly"
+    "object_id": "deckfilesngt"
   }
 ]
