@@ -14,6 +14,7 @@ on:
       - "pkg/**"
       - "ipkroot/**"
       - "rust-modules/**"
+      - "docs/deckfiles-ui-design.md"
       - "ci/**"
       - "vendor/**"
   workflow_dispatch:
