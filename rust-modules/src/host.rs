@@ -121,6 +121,12 @@ pub fn run_signed_out(platform: &'static Platform) -> Exit {
     run(platform, c"", 0)
 }
 
+/// Install a platform's OS services without entering the legacy application loop.
+/// A platform-owned standalone application calls this before opening its own window.
+pub fn install_services(platform: &Platform) {
+    platform.install_services();
+}
+
 /// **The owner's ruling, held in the source.** `tests/host_interface.rs` is a separate crate and reads only its own
 /// spelling, so nothing there stops `lib.rs` from growing `pub mod app;` or `pub use app::platform::Shell;`: every
 /// test would still pass. These pins read the crate's own source, in the style of the `include_str!` pins of
