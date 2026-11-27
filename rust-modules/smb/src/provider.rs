@@ -1,7 +1,7 @@
 //! Provider-neutral source contract and concrete SMB/local adapters for DeckFiles.
 use crate::{connect_server_blocking, Entry, Session};
 use plx_os::storage::deck_vault::{DeckVault, SourceRecord};
-pub use plx_os::deck_vault::SourceKind;
+pub use plx_os::storage::deck_vault::SourceKind;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
