@@ -168,14 +168,16 @@ else
   # binary then still links and runs, only every float multiply in the app becomes a call to
   # __aeabi_fmul: nothing fails, the UI just gets slower. ci/check-vfp.py catches the flag
   # directly with a probe compile; this is the same question asked of the linked binary.
-  # Measured on the stable build (2026-10-16, -lm ahead of the staticlib): 3057 `vmul.f32` against
-  # 2 `bl __aeabi_fmul`, both in core's float PARSING (std is prebuilt, its float code stays soft).
-  # So the test is a ratio, not zero. Both objdumps (GNU, llvm) print `bl\t<addr> <__aeabi_fmul>`.
+  # The legacy full UI measured 3057 `vmul.f32` against 2 `bl __aeabi_fmul` (2026-10-16).
+  # The first standalone DeckFiles binary measures 76: it deliberately drops the old UI tree, so
+  # the absolute count is much smaller. Keep a floor of 50 as the disassembly positive control;
+  # the ratio and soft-arithmetic ceilings below remain the actual soft-float regression gates.
+  # Both objdumps (GNU, llvm) print `bl\t<addr> <__aeabi_fmul>`.
   VFPMUL=$(grep -cE '[[:space:]]vmul\.f32[[:space:]]+s[0-9]' <<<"$D" || true)
   SOFTMUL=$(grep -cE '[[:space:]]bl[[:space:]].*<__aeabi_fmul' <<<"$D" || true)
   # Positive control, as for dmb: a floor far below the measured count but far above noise, so an
   # objdump that printed the instructions in another form fails here instead of passing vacuously.
-  [ "$VFPMUL" -gt 100 ] || fail "only $VFPMUL vmul.f32 instructions — our crates are not using VFP (is -C target-feature=-soft-float still in RUST_CODEGEN?) or the disassembly scan is not working"
+  [ "$VFPMUL" -gt 50 ] || fail "only $VFPMUL vmul.f32 instructions — our crates are not using VFP (is -C target-feature=-soft-float still in RUST_CODEGEN?) or the disassembly scan is not working"
   [ $((SOFTMUL * 20)) -lt "$VFPMUL" ] || fail "$SOFTMUL calls to __aeabi_fmul against $VFPMUL vmul.f32 — float math is going through software libcalls"
   ok "$VFPMUL vmul.f32, $SOFTMUL __aeabi_fmul calls (core's float parsing)"
 
