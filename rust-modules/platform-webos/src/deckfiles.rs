@@ -262,7 +262,9 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
     player.session.install_uri_preflight_port(composition.resolver);
     player.session.install_backends(adapter.composed_backends());
 
-    let data_dir = plx_base::paths::app_dir().join("DeckFiles");
+    // Source records and settings belong under the platform's persistent state root,
+    // never beside the read-only application payload.
+    let data_dir = plx_base::paths::persistent_state_root().join("DeckFiles");
     let mut app = match DeckFilesApp::load(&data_dir) {
         Ok(app) => app,
         Err(error) => {
