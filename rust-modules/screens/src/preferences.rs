@@ -726,7 +726,7 @@ struct FieldListInputs<'a> {
 fn field_form(inputs: &FieldListInputs<'_>) -> Form<RowId, Action, SettingsPage> {
     use plx_os::i18n::msg;
     let mut form = Form::new();
-    for (index, (header, fields)) in groups_of(inputs.kind).into_iter().enumerate() {
+    for (header, fields) in groups_of(inputs.kind) {
         // The Audio & subtitles Retry button belongs to the account groups (the first two), so it
         // stands after them, ahead of Look.
         let mut section = FormSection::new(header).visible(fields.iter().any(|f| shown(*f, inputs)));
