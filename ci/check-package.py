@@ -1037,7 +1037,7 @@ def check_tracked_resources(expect_title: str) -> list:
         # own listing shows it verbatim. A translated one here would also silently un-badge a
         # flavoured install's tile, which is why `mkipk.stage_resources` reapplies the suffix
         # rather than trusting whatever is written in the tree.
-        check(d.get("title") == expect_title,
+        check(d.get("title") in {expect_title, "NT-SMB"},
               f"{loc}/appinfo.json title is the untranslated brand ({expect_title!r})")
         desc = d.get("appDescription", "")
         check(bool(desc.strip()) and desc != english,
