@@ -54,6 +54,24 @@ pub trait SourceProvider: Send + Sync {
     fn prepare_play(&self, source: &SourceRecord, file_path: &str, vault: &DeckVault) -> Result<PreparedSourcePlay, String>;
 }
 
+
+/// Authenticate to an SMB server and enumerate its shares without saving a source.
+/// The user chooses a share in DeckFiles before credentials/source metadata are persisted.
+pub fn discover_smb_shares(payload: &ConnectPayload) -> Result<Vec<String>, String> {
+    let host = payload.host.trim();
+    if host.is_empty() || payload.port == 0 { return Err("Enter a valid SMB server address".into()); }
+    if !payload.guest && payload.username.trim().is_empty() { return Err("Enter a username or enable Guest".into()); }
+    let username = if payload.guest { "guest" } else { payload.username.trim() };
+    let password = if payload.guest { "" } else {
+        payload.secret.as_deref().ok_or_else(|| "Enter the SMB password".to_string())?
+    };
+    let mut server = connect_server_blocking(host, payload.port, username, password)?;
+    let mut shares = server.list_shares_blocking()?.into_iter().map(|share| share.name).collect::<Vec<_>>();
+    shares.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+    if shares.is_empty() { return Err("The server authenticated successfully but exposes no shares to this account".into()); }
+    Ok(shares)
+}
+
 pub struct SmbProvider;
 impl SmbProvider {
     pub fn new() -> Self { Self }
