@@ -15,6 +15,7 @@
 pub mod files_browser;
 pub mod add_source_modal;
 pub mod deck_settings;
+pub mod deck_player;
 pub mod about_panel;
 pub mod account_menu;
 pub mod alt_sources;
