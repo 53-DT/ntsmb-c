@@ -26,6 +26,7 @@ compile_error!("native playback requires play-uri or play-feed");
 mod crash_capture;
 mod keymanager;
 mod port;
+mod deckfiles;
 mod system;
 mod webos;
 

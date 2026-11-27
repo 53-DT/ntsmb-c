@@ -30,7 +30,7 @@ pub enum DeckFilesPage { #[default] Files, AddSource, Settings, Player }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeckFilesInput {
     Up, Down, Left, Right, Confirm, Back, NextField, ToggleMode,
-    Text(String), Backspace, OpenFiles, OpenAddSource, OpenSettings,
+    Text(String), Backspace, ToggleGuest, CycleSource(isize), OpenFiles, OpenAddSource, OpenSettings,
 }
 
 /// Work requested by the UI. The host must execute I/O away from the render thread.
@@ -158,6 +158,23 @@ impl DeckFilesApp {
             DeckFilesInput::OpenFiles => self.page = DeckFilesPage::Files,
             DeckFilesInput::OpenAddSource => { self.add_source.cancel(); self.page = DeckFilesPage::AddSource; }
             DeckFilesInput::OpenSettings => { self.reload_settings(); self.page = DeckFilesPage::Settings; }
+            DeckFilesInput::CycleSource(delta) if self.page == DeckFilesPage::Files => {
+                let available = self.files.sources.iter().filter(|source| source.available).collect::<Vec<_>>();
+                if !available.is_empty() {
+                    let current = self.files.active_source.as_deref()
+                        .and_then(|id| available.iter().position(|source| source.id == id));
+                    let next = match current {
+                        Some(index) => (index as isize + delta).rem_euclid(available.len() as isize) as usize,
+                        None if delta < 0 => available.len() - 1,
+                        None => 0,
+                    };
+                    let source_id = available[next].id.clone();
+                    if self.files.choose_source(&source_id) {
+                        self.files.set_loading(true);
+                        return DeckFilesAction::ListDirectory { source_id, path: String::new() };
+                    }
+                }
+            }
             DeckFilesInput::Up => match self.page {
                 DeckFilesPage::Files => self.files.move_selection(-1),
                 DeckFilesPage::AddSource => self.add_source.move_focus(-1), _ => {}
@@ -166,13 +183,26 @@ impl DeckFilesApp {
                 DeckFilesPage::Files => self.files.move_selection(1),
                 DeckFilesPage::AddSource => self.add_source.move_focus(1), _ => {}
             },
-            DeckFilesInput::Left | DeckFilesInput::Back if self.page == DeckFilesPage::Files => {
+            DeckFilesInput::Left if self.page == DeckFilesPage::AddSource => self.add_source.move_focus(-1),
+            DeckFilesInput::Right | DeckFilesInput::NextField if self.page == DeckFilesPage::AddSource => self.add_source.move_focus(1),
+            DeckFilesInput::Left if self.page == DeckFilesPage::Files && !self.files.current_path.is_empty() => {
                 if let (Some(source_id), Some(path)) = (self.files.active_source.clone(), self.files.go_back()) {
                     self.files.set_loading(true);
                     return DeckFilesAction::ListDirectory { source_id, path };
                 }
             }
-            DeckFilesInput::Right | DeckFilesInput::NextField if self.page == DeckFilesPage::AddSource => self.add_source.move_focus(1),
+            DeckFilesInput::Back if self.page == DeckFilesPage::Files => {
+                if let (Some(source_id), Some(path)) = (self.files.active_source.clone(), self.files.go_back()) {
+                    self.files.set_loading(true);
+                    return DeckFilesAction::ListDirectory { source_id, path };
+                }
+            }
+            DeckFilesInput::ToggleGuest if self.page == DeckFilesPage::AddSource => {
+                self.add_source.draft.guest = !self.add_source.draft.guest;
+                if self.add_source.draft.guest { self.add_source.draft.password.clear(); }
+                self.add_source.error = None;
+                self.add_source.focused_field = self.add_source.focused_field.min(self.add_source.field_count().saturating_sub(1));
+            }
             DeckFilesInput::ToggleMode if self.page == DeckFilesPage::Files => self.files.toggle_mode(),
             DeckFilesInput::Text(value) if self.page == DeckFilesPage::AddSource => {
                 let field = self.add_source.focused_field;
@@ -196,6 +226,12 @@ impl DeckFilesApp {
             }
             DeckFilesInput::Backspace if self.page == DeckFilesPage::AddSource => {
                 let field = self.add_source.focused_field;
+                if self.add_source.draft.provider == SourceProviderChoice::Smb && field == 2 {
+                    let mut port = self.add_source.draft.port.to_string();
+                    port.pop();
+                    if port.is_empty() { port = "0".into(); }
+                    if let Ok(parsed) = port.parse::<u16>() { self.add_source.draft.port = parsed; }
+                }
                 let target = match self.add_source.draft.provider {
                     SourceProviderChoice::Smb => match field {
                         0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.host),

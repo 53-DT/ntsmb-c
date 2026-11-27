@@ -5,7 +5,7 @@ use plx_ui::text_view::TextView;
 use plx_ui::theme;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum BrowserMode { #[default] Grid, List }
+pub enum BrowserMode { Grid, #[default] List }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceItem { pub id: String, pub label: String, pub kind_label: String, pub available: bool, pub has_saved_credential: bool }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,7 +86,7 @@ impl FilesBrowserScreen {
         }
         let crumb=self.breadcrumb().join("  ›  ");
         TextView::new(&crumb,theme::size::BODY,theme::TEXT_PRIMARY).draw(p,Rect::new(main.x+36.0,main.y+26.0,main.w-72.0,48.0));
-        TextView::new("Select     Grid / List     Search",theme::size::CAPTION,theme::TEXT_SECONDARY).draw(p,Rect::new(main.x+36.0,main.y+88.0,main.w-72.0,38.0));
+        TextView::new("OK open     Left / Right sources     Play add     Pause settings",theme::size::CAPTION,theme::TEXT_SECONDARY).draw(p,Rect::new(main.x+36.0,main.y+88.0,main.w-72.0,38.0));
         if self.loading { TextView::new("Loading…",theme::size::BODY,theme::TEXT_SECONDARY).draw(p,Rect::new(main.x+36.0,main.y+170.0,main.w-72.0,44.0)); }
         else if let Some(error)=&self.error { TextView::new(error,theme::size::CAPTION,theme::DANGER).draw(p,Rect::new(main.x+36.0,main.y+170.0,main.w-72.0,64.0)); }
         else { for (i,e) in self.visible_entries().iter().take(10).enumerate() {

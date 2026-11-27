@@ -27,7 +27,7 @@ const DISPLAY: &dyn plx_os::tv::sink::DisplaySink = SINK;
 /// cannot be read (not expected on a device), which the table's `layout` states. `paths` spells the same
 /// directory once more, as the migration source for the pre-flavour `auth.json`; a test below holds the two
 /// together.
-const INSTALL_DIR: &str = "/media/developer/apps/usr/palm/applications/io.github.tiper.finnative";
+const INSTALL_DIR: &str = "/media/developer/apps/usr/palm/applications/io.github.53-dt.deckfiles";
 
 /// What the lower layers read: the webOS identity, key manager, Home key and toast, the storage helper
 /// and the native playback seam. The window, the bus pump and the frame probe are the loop's own, in [`PLATFORM`].
@@ -285,7 +285,9 @@ fn plex_main(pms_host: *const c_char, pms_port: c_int) -> ! {
     // SAFETY: `src/main.c` hands `PMS_HOST`, a NUL-terminated string literal, so the pointer is never NULL.
     let host = unsafe { std::ffi::CStr::from_ptr(pms_host) };
     let port = u16::try_from(pms_port).expect("PMS_PORT is a TCP port");
-    plx_base::process::exit_now(host::run(&PLATFORM, host, port).code)
+    let _ = (host, port);
+    PLATFORM.install_services();
+    plx_base::process::exit_now(crate::deckfiles::run(&WebosShell).code)
 }
 
 const _: fn(*const c_char, c_int) -> ! = plex_main;

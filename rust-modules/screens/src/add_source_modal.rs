@@ -27,6 +27,7 @@ impl AddSourceModal {
     pub fn validate(&self)->Result<(),String>{match self.draft.provider{
         SourceProviderChoice::Smb=>{if self.draft.host.trim().is_empty(){return Err("Enter the SMB server address".into());}
             if self.draft.port==0{return Err("Enter a valid SMB port".into());}
+            if self.draft.share.trim().is_empty(){return Err("Enter the SMB share name".into());}
             if !self.draft.guest&&self.draft.username.trim().is_empty(){return Err("Enter a username or enable Guest".into());}
             if !self.draft.guest&&self.draft.password.is_empty(){return Err("Enter the SMB password".into());}}
         SourceProviderChoice::Local=>if self.draft.local_folder.trim().is_empty(){return Err("Choose a local media folder".into());},
@@ -46,7 +47,12 @@ impl AddSourceModal {
         let fields=match self.draft.provider{
             SourceProviderChoice::Smb=>vec![format!("Name: {}",self.draft.label),format!("Server: {}",self.draft.host),format!("Port: {}",self.draft.port),format!("Share: {}",self.draft.share),format!("Username: {}",self.draft.username),format!("Password: {}","•".repeat(self.draft.password.chars().count())),format!("Guest: {}",if self.draft.guest{"On"}else{"Off"})],
             SourceProviderChoice::Local=>vec![format!("Name: {}",self.draft.label),format!("Folder: {}",self.draft.local_folder)],SourceProviderChoice::GoogleDrive=>Vec::new()};
-        for(i,field)in fields.iter().enumerate(){TextView::new(field,theme::size::CAPTION,theme::TEXT_SECONDARY).draw(p,Rect::new(r.x+42.0,r.y+270.0+i as f32*42.0,r.w-84.0,36.0));}
+        for(i,field)in fields.iter().enumerate(){
+            let row=Rect::new(r.x+34.0,r.y+264.0+i as f32*42.0,r.w-68.0,40.0);
+            if i==self.focused_field { p.rrect(row,7.0,7.0,theme::CONTROL_IDLE_FILL); }
+            TextView::new(field,theme::size::CAPTION,if i==self.focused_field {theme::ACCENT_INK}else{theme::TEXT_SECONDARY})
+                .draw(p,Rect::new(row.x+12.0,row.y+3.0,row.w-24.0,34.0));
+        }
         if let Some(error)=&self.error{p.rrect(Rect::new(r.x+36.0,r.y+r.h-132.0,r.w-72.0,46.0),8.0,8.0,theme::CONTROL_DANGER_IDLE_FILL);
             TextView::new(error,theme::size::CAPTION,theme::DANGER).draw(p,Rect::new(r.x+52.0,r.y+r.h-126.0,r.w-104.0,34.0));}
         let footer=match self.state{ConnectState::Connecting=>"Connecting…",ConnectState::Connected=>"Connected",ConnectState::Editing=>"Back     Cancel     Connect"};

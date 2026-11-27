@@ -414,7 +414,7 @@ impl Platform {
     /// The third line publishes the platform's [`Libraries`](plx_os::tv::Libraries) into `plx_base::dynlib`
     /// the same way (the shape is `plx_base::choice::Choice`'s, shared with the layout): it must run before
     /// the first libcurl table or EGL probe loads, none of which runs before this install.
-    pub(crate) fn install_services(&self) {
+    pub fn install_services(&self) {
         let _ = plx_os::tv::install(self.services);
         if let Err(refused) = plx_base::paths::publish(self.services.layout) {
             plx_base::eventlog::log(&format!("layout: not published: {refused}"));

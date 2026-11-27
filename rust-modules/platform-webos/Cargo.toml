@@ -61,6 +61,9 @@ deckfiles-app = { path = "../deckfiles-app" }
 plx_base = { path = "../base" }
 plx_os = { path = "../os" }
 plx_gfx = { path = "../gfx" }
+plx_media = { path = "../media" }
+plx_smb = { path = "../smb", features = ["playback"] }
+plx_ui = { path = "../ui" }
 plx_telemetry = { path = "../telemetry" }
 plx_shell_sdl = { path = "../shell-sdl" }
 libc = "0.2"
