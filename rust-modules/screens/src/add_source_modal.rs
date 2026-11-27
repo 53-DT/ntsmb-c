@@ -47,6 +47,7 @@ impl AddSourceModal {
         self.draft.share=share;self.state=ConnectState::Connecting;self.error=None;Ok(self.draft.clone())
     }
     pub fn finish_connect(&mut self,result:Result<(),String>){match result{Ok(())=>{self.state=ConnectState::Connected;self.draft.password.clear();self.error=None;},Err(e)=>{self.state=ConnectState::SelectingShare;self.error=Some(e);}}}
+    pub fn return_to_form(&mut self){self.state=ConnectState::Editing;self.draft.share.clear();self.error=None;}
     pub fn cancel(&mut self){self.draft.password.clear();self.state=ConnectState::Editing;self.error=None;self.shares.clear();self.selected_share=0;}
     pub fn draw(&self,p:Painter,r:Rect){
         p.rrect(r,18.0,18.0,theme::DECKFILES_CANVAS);
