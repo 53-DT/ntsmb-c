@@ -25,6 +25,7 @@ pub struct ConnectPayload {
     pub share: String,
     pub username: String,
     pub guest: bool,
+    pub save_password: bool,
     pub secret: Option<String>,
     pub root_path: String,
 }
@@ -93,7 +94,8 @@ impl SourceProvider for SmbProvider {
         let record = SourceRecord { id, kind: SourceKind::Smb, label: nonempty(&payload.label, host), host: host.into(),
             port: payload.port, share: payload.share.trim().into(), username: username.into(), guest: payload.guest,
             has_saved_credential: false, root_path: String::new(), last_path: String::new(), created_at: now, last_connected_at: now };
-        vault.upsert_source(record.clone(), if payload.guest { None } else { payload.secret.as_deref() })?;
+        vault.upsert_source(record.clone(), if payload.guest || !payload.save_password { None } else { payload.secret.as_deref() })?;
+        if !payload.guest && !payload.save_password { vault.clear_credential(&record.id)?; }
         Ok(record)
     }
 
