@@ -86,6 +86,13 @@ impl DeckFilesApp {
         }
     }
 
+    /// Reload the vault after an I/O worker has persisted a source.
+    pub fn reload_vault(&mut self, app_data_dir: impl AsRef<std::path::Path>) -> Result<(), String> {
+        self.vault = DeckVault::load(app_data_dir)?;
+        self.refresh_sources();
+        Ok(())
+    }
+
     /// Refresh the source rail and the credentials page from the provider-neutral vault.
     pub fn refresh_sources(&mut self) {
         self.files.set_sources(self.vault.list_sources().iter().map(|source| {
