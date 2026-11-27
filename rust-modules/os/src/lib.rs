@@ -28,4 +28,6 @@ pub mod labcfg; // `lab.json` (the Cloud Lab session config) and the two answers
 // Stage A foundation: owner adapters connect these APIs in the next integration stage.
 #[allow(dead_code)]
 pub mod storage;
+/// DeckFiles source records, secure credentials and app-wide preferences.
+pub mod deck_vault;
 pub mod tv; // the television as everything outside the platform crate sees it: the interfaces the webOS port fills at boot (step L15)
