@@ -303,20 +303,22 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
         if app.page == DeckFilesPage::Player { update_player_snapshot(&mut app, &player, &current_title); }
 
         plx_gfx::egl::frame_damage();
-        let (vx, vy, vw, vh) = plx_base::surface::viewport();
-        unsafe { glViewport(vx, vy, vw, vh); }
-        plx_gfx::gfx::field_frame_begin();
-        plx_gfx::text::begin_frame();
-        plx_gfx::gfx::straighten::frame_begin();
-        #[cfg(feature = "threadcheck")]
-        let _draw_scope = plx_base::task::watchdog::draw_scope();
-        if player.video_plane_bound {
-            plx_gfx::gfx::frame_clear_through();
-        } else {
-            let (r, g, b) = plx_ui::theme::CLEAR_RGB;
-            plx_gfx::gfx::frame_clear(r, g, b);
+        {
+            #[cfg(feature = "threadcheck")]
+            let _draw_scope = plx_base::task::watchdog::draw_scope();
+            let (vx, vy, vw, vh) = plx_base::surface::viewport();
+            unsafe { glViewport(vx, vy, vw, vh); }
+            plx_gfx::gfx::field_frame_begin();
+            plx_gfx::text::begin_frame();
+            plx_gfx::gfx::straighten::frame_begin();
+            if player.video_plane_bound {
+                plx_gfx::gfx::frame_clear_through();
+            } else {
+                let (r, g, b) = plx_ui::theme::CLEAR_RGB;
+                plx_gfx::gfx::frame_clear(r, g, b);
+            }
+            plx_ui::guard(|| app.draw(Painter::root(), Rect::new(0.0, 0.0, 1920.0, 1080.0)));
         }
-        plx_ui::guard(|| app.draw(Painter::root(), Rect::new(0.0, 0.0, 1920.0, 1080.0)));
         plx_gfx::gfx::straighten::straighten_surface(player.video_plane_bound);
         shell.opaque_route(player.video_plane_bound);
         (shell.frame().present.before_swap)();
