@@ -70,8 +70,8 @@ pub const STABLE_APP_ID: &str = "io.github.53-dt.deckfiles";
 /// own table, and a test there holds the two together through [`session_candidates`].
 const LEGACY_APP_DIR: &str = "/media/developer/apps/usr/palm/applications/io.github.tiper.finnative";
 
-/// **Which install this process is** — `io.github.tiper.finnative` for the app users get, or
-/// `io.github.tiper.finnative.<flavour>` for a developer build sitting beside it on the same television.
+/// **Which install this process is** — `io.github.53-dt.deckfiles` for the app users get, or
+/// `io.github.53-dt.deckfiles.<flavour>` for a developer build sitting beside it on the same television.
 ///
 /// Read from the INSTALL DIRECTORY, not compiled in, and that is the whole design.
 ///
@@ -131,7 +131,7 @@ fn installed_app_id(exe: &Path) -> Option<String> {
 }
 
 /// The flavour suffix of [`app_id`] — `None` for the app users get, `Some("debug")` for
-/// `io.github.tiper.finnative.debug`.
+/// `io.github.53-dt.deckfiles.debug`.
 ///
 /// One definition, so no caller has to know how a flavour is spelled. Everything that must differ
 /// between two installs on one television — the runtime root, the session file, the plex.tv device
@@ -1122,22 +1122,24 @@ mod tests {
     #[test]
     fn the_app_id_is_the_install_directory_and_only_a_real_one() {
         use std::path::Path;
-        let dev = "/media/developer/apps/usr/palm/applications/io.github.tiper.finnative.debug/plxnative";
-        let hbc = "/media/cryptofs/apps/usr/palm/applications/io.github.tiper.finnative/plxnative";
+        let dev = "/media/developer/apps/usr/palm/applications/io.github.53-dt.deckfiles.debug/plxnative";
+        let hbc = "/media/cryptofs/apps/usr/palm/applications/io.github.53-dt.deckfiles/plxnative";
         let nightly =
-            "/media/developer/apps/usr/palm/applications/io.github.tiper.finnative.nightly/plxnative";
+            "/media/developer/apps/usr/palm/applications/io.github.53-dt.deckfiles.nightly/plxnative";
+        let legacy = "/media/developer/apps/usr/palm/applications/io.github.tiper.finnative/plxnative";
         assert_eq!(
             super::installed_app_id(Path::new(dev)).as_deref(),
-            Some("io.github.tiper.finnative.debug")
+            Some("io.github.53-dt.deckfiles.debug")
         );
         assert_eq!(
             super::installed_app_id(Path::new(hbc)).as_deref(),
-            Some("io.github.tiper.finnative")
+            Some("io.github.53-dt.deckfiles")
         );
         assert_eq!(
             super::installed_app_id(Path::new(nightly)).as_deref(),
-            Some("io.github.tiper.finnative.nightly")
+            Some("io.github.53-dt.deckfiles.nightly")
         );
+        assert_eq!(super::installed_app_id(Path::new(legacy)).as_deref(), Some("io.github.tiper.finnative"));
         // A host build: the parent is `debug`, whose parent is `target-sim` — not `applications`.
         // Without this arm the simulator would mint an app called `debug`, take `/tmp/debug` as its
         // runtime root and look for a session file named after it.
@@ -1167,13 +1169,13 @@ mod tests {
             None
         );
         assert_eq!(
-            "io.github.tiper.finnative.debug"
+            "io.github.53-dt.deckfiles.debug"
                 .strip_prefix(super::STABLE_APP_ID)
                 .and_then(|r| r.strip_prefix('.')),
             Some("debug")
         );
         assert_eq!(
-            "io.github.tiper.finnative.nightly"
+            "io.github.53-dt.deckfiles.nightly"
                 .strip_prefix(super::STABLE_APP_ID)
                 .and_then(|r| r.strip_prefix('.')),
             Some("nightly")
@@ -1198,13 +1200,13 @@ mod tests {
             return; // a host build answers from the environment first; this is the television rule
         }
         let stable = super::resolve_runtime_dir(None, None, super::STABLE_APP_ID);
-        let debug = super::resolve_runtime_dir(None, None, "io.github.tiper.finnative.debug");
-        let nightly = super::resolve_runtime_dir(None, None, "io.github.tiper.finnative.nightly");
-        // FinNative: the stable install gets its own root too, because the bare `/tmp` belongs to a
+        let debug = super::resolve_runtime_dir(None, None, "io.github.53-dt.deckfiles.debug");
+        let nightly = super::resolve_runtime_dir(None, None, "io.github.53-dt.deckfiles.nightly");
+        // DeckFiles: the stable install gets its own root too, because the bare `/tmp` belongs to a
         // stable PlxNative installed on the same television.
-        assert_eq!(stable, std::path::Path::new("/tmp/io.github.tiper.finnative"));
-        assert_eq!(debug, std::path::Path::new("/tmp/io.github.tiper.finnative.debug"));
-        assert_eq!(nightly, std::path::Path::new("/tmp/io.github.tiper.finnative.nightly"));
+        assert_eq!(stable, std::path::Path::new("/tmp/io.github.53-dt.deckfiles"));
+        assert_eq!(debug, std::path::Path::new("/tmp/io.github.53-dt.deckfiles.debug"));
+        assert_eq!(nightly, std::path::Path::new("/tmp/io.github.53-dt.deckfiles.nightly"));
         assert_ne!(
             stable.join("plxnative-events.log"),
             debug.join("plxnative-events.log")
@@ -1338,7 +1340,7 @@ mod tests {
             ]
         };
         let a = named(super::STABLE_APP_ID);
-        let b = named("io.github.tiper.finnative.debug");
+        let b = named("io.github.53-dt.deckfiles.debug");
         assert!(
             a.iter().all(|p| !b.contains(p)),
             "{a:?} and {b:?} share a session file"
