@@ -44,7 +44,7 @@ impl DeckPlayerScreen {
         PlayerPanel::Audio=>self.snapshot.audio_tracks.iter().map(|t|format!("{}  ·  {}  ·  {}",t.label,t.language,t.codec)).collect(),
         PlayerPanel::Subtitles=>{let mut rows=vec!["Off".to_string()];rows.extend(self.snapshot.subtitle_tracks.iter().map(|t|format!("{}  ·  {}  ·  {}",t.label,t.language,t.codec)));rows},
         PlayerPanel::More=>vec!["Subtitle timing".into(),"Recovery".into(),"Play next".into(),"Close player".into()],
-        PlayerPanel::Timing=>vec![format!("Offset  {:+} ms",self.subtitle_offset_ms),"− 250 ms".into,"+ 250 ms".into,"Reset timing".into()],
+        PlayerPanel::Timing=>vec![format!("Offset  {:+} ms",self.subtitle_offset_ms),"− 250 ms".into,"+ 250 ms".into(),"Reset timing".into()],
         PlayerPanel::Recovery=>self.recovery_steps.iter().map(|s|recovery_label(*s).to_string()).collect(),
         PlayerPanel::Hidden=>Vec::new()}}
     pub fn handle_key(&mut self,key:PlayerKey)->Option<PlayerAction>{
