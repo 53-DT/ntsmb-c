@@ -60,4 +60,4 @@ impl AddSourceModal {
     }
 }
 #[cfg(test)]mod tests{use super::*;#[test]fn cloud_provider_is_disabled(){assert_eq!(AddSourceModal::provider_cards()[2],(SourceProviderChoice::GoogleDrive,"Google Drive",false));}
-#[test]fn guest_smb_does_not_require_a_password(){let mut m=AddSourceModal::new();m.draft.host="nas".into();m.draft.username="viewer".into();assert!(m.validate().is_err());m.draft.guest=true;assert!(m.validate().is_ok());}}
+#[test]fn guest_smb_does_not_require_a_password(){let mut m=AddSourceModal::new();m.draft.host="nas".into();m.draft.share="media".into();m.draft.username="viewer".into();assert!(m.validate().is_err());m.draft.guest=true;assert!(m.validate().is_ok());}}
