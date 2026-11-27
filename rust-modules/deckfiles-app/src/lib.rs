@@ -265,7 +265,11 @@ impl DeckFilesApp {
                         }
                     }
                 },
-                DeckFilesPage::AddSource => if let Ok(draft) = self.add_source.begin_connect() {
+                DeckFilesPage::AddSource => {
+                    match self.add_source.focused_field {
+                        6 => { self.add_source.draft.guest = !self.add_source.draft.guest; if self.add_source.draft.guest { self.add_source.draft.password.clear(); self.add_source.draft.save_password=false; } self.add_source.error=None; },
+                        7 => { if !self.add_source.draft.guest { self.add_source.draft.save_password = !self.add_source.draft.save_password; } },
+                        8 => if let Ok(draft) = self.add_source.begin_connect() {
                     let kind = match draft.provider {
                         SourceProviderChoice::Smb => SourceKind::Smb,
                         SourceProviderChoice::Local => SourceKind::Local,
@@ -273,9 +277,11 @@ impl DeckFilesApp {
                     };
                     return DeckFilesAction::Connect(ConnectPayload {
                         kind, label: draft.label, host: draft.host, port: draft.port, share: draft.share,
-                        username: draft.username, guest: draft.guest,
+                        username: draft.username, guest: draft.guest, save_password: draft.save_password,
                         secret: (!draft.guest).then_some(draft.password), root_path: draft.local_folder,
                     });
+                        }, _ => {}
+                    }
                 },
                 DeckFilesPage::Settings => return DeckFilesAction::SaveSettings,
                 DeckFilesPage::Player => {},
