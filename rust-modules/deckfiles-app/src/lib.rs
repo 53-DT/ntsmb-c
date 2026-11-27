@@ -26,6 +26,22 @@ use plx_ui::{Painter, Rect};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DeckFilesPage { #[default] Files, AddSource, Settings, Player }
 
+/// Platform-neutral input vocabulary for the DeckFiles remote-control adapter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeckFilesInput {
+    Up, Down, Left, Right, Confirm, Back, NextField, ToggleMode,
+    Text(String), Backspace, OpenFiles, OpenAddSource, OpenSettings,
+}
+
+/// Work requested by the UI. The host must execute I/O away from the render thread.
+#[derive(Clone, Debug)]
+pub enum DeckFilesAction {
+    None,
+    ListDirectory { source_id: String, path: String },
+    Connect(ConnectPayload),
+    PreparePlayback { source_id: String, path: String },
+    SaveSettings,
+}
 /// The state shared by the Files, Add Source, Settings and Player surfaces.
 pub struct DeckFilesApp {
     pub page: DeckFilesPage,
@@ -134,6 +150,126 @@ impl DeckFilesApp {
         provider.prepare_play(source, file_path, &self.vault)
     }
 
+    /// Apply one input edge and return any I/O action for the host adapter.
+    /// No network or directory enumeration runs in this method.
+    pub fn handle_input(&mut self, input: DeckFilesInput) -> DeckFilesAction {
+        use deckfiles_screens::add_source_modal::SourceProviderChoice;
+        match input {
+            DeckFilesInput::OpenFiles => self.page = DeckFilesPage::Files,
+            DeckFilesInput::OpenAddSource => { self.add_source.cancel(); self.page = DeckFilesPage::AddSource; }
+            DeckFilesInput::OpenSettings => { self.reload_settings(); self.page = DeckFilesPage::Settings; }
+            DeckFilesInput::Up => match self.page {
+                DeckFilesPage::Files => self.files.move_selection(-1),
+                DeckFilesPage::AddSource => self.add_source.move_focus(-1), _ => {}
+            },
+            DeckFilesInput::Down => match self.page {
+                DeckFilesPage::Files => self.files.move_selection(1),
+                DeckFilesPage::AddSource => self.add_source.move_focus(1), _ => {}
+            },
+            DeckFilesInput::Left | DeckFilesInput::Back if self.page == DeckFilesPage::Files => {
+                if let (Some(source_id), Some(path)) = (self.files.active_source.clone(), self.files.go_back()) {
+                    self.files.set_loading(true);
+                    return DeckFilesAction::ListDirectory { source_id, path };
+                }
+            }
+            DeckFilesInput::Right | DeckFilesInput::NextField if self.page == DeckFilesPage::AddSource => self.add_source.move_focus(1),
+            DeckFilesInput::ToggleMode if self.page == DeckFilesPage::Files => self.files.toggle_mode(),
+            DeckFilesInput::Text(value) if self.page == DeckFilesPage::AddSource => {
+                let field = self.add_source.focused_field;
+                let target = match self.add_source.draft.provider {
+                    SourceProviderChoice::Smb => match field {
+                        0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.host),
+                        3 => Some(&mut self.add_source.draft.share), 4 => Some(&mut self.add_source.draft.username),
+                        5 => Some(&mut self.add_source.draft.password), _ => None,
+                    },
+                    SourceProviderChoice::Local => match field {
+                        0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.local_folder), _ => None,
+                    },
+                    SourceProviderChoice::GoogleDrive => None,
+                };
+                if let Some(target) = target { target.push_str(&value); }
+                if self.add_source.draft.provider == SourceProviderChoice::Smb && field == 2 {
+                    let mut port = self.add_source.draft.port.to_string(); port.push_str(&value);
+                    if let Ok(parsed) = port.parse::<u16>() { self.add_source.draft.port = parsed; }
+                }
+                self.add_source.error = None;
+            }
+            DeckFilesInput::Backspace if self.page == DeckFilesPage::AddSource => {
+                let field = self.add_source.focused_field;
+                let target = match self.add_source.draft.provider {
+                    SourceProviderChoice::Smb => match field {
+                        0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.host),
+                        3 => Some(&mut self.add_source.draft.share), 4 => Some(&mut self.add_source.draft.username),
+                        5 => Some(&mut self.add_source.draft.password), _ => None,
+                    },
+                    SourceProviderChoice::Local => match field {
+                        0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.local_folder), _ => None,
+                    },
+                    SourceProviderChoice::GoogleDrive => None,
+                };
+                if let Some(target) = target { target.pop(); }
+            }
+            DeckFilesInput::Confirm => match self.page {
+                DeckFilesPage::Files => if let Some(entry) = self.files.selected_entry().cloned() {
+                    if let Some(source_id) = self.files.active_source.clone() {
+                        if entry.is_folder() {
+                            if let Some(path) = self.files.enter_selected() {
+                                self.files.set_loading(true);
+                                return DeckFilesAction::ListDirectory { source_id, path };
+                            }
+                        } else if entry.is_media() {
+                            return DeckFilesAction::PreparePlayback { source_id, path: entry.path };
+                        }
+                    }
+                },
+                DeckFilesPage::AddSource => if let Ok(draft) = self.add_source.begin_connect() {
+                    let kind = match draft.provider {
+                        SourceProviderChoice::Smb => SourceKind::Smb,
+                        SourceProviderChoice::Local => SourceKind::Local,
+                        SourceProviderChoice::GoogleDrive => SourceKind::GoogleDriveSlot,
+                    };
+                    return DeckFilesAction::Connect(ConnectPayload {
+                        kind, label: draft.label, host: draft.host, port: draft.port, share: draft.share,
+                        username: draft.username, guest: draft.guest,
+                        secret: (!draft.guest).then_some(draft.password), root_path: draft.local_folder,
+                    });
+                },
+                DeckFilesPage::Settings => return DeckFilesAction::SaveSettings,
+                DeckFilesPage::Player => {},
+            },
+            DeckFilesInput::Back => match self.page {
+                DeckFilesPage::AddSource => { self.add_source.cancel(); self.page = DeckFilesPage::Files; }
+                DeckFilesPage::Settings | DeckFilesPage::Player => self.page = DeckFilesPage::Files,
+                DeckFilesPage::Files => {},
+            },
+            _ => {},
+        }
+        DeckFilesAction::None
+    }
+
+    /// Publish the result of an asynchronous connection attempt.
+    pub fn finish_connect(&mut self, result: Result<String, String>) {
+        match result {
+            Ok(_) => { self.add_source.finish_connect(Ok(())); self.page = DeckFilesPage::Files; self.refresh_sources(); }
+            Err(error) => self.add_source.finish_connect(Err(error)),
+        }
+    }
+
+    /// Publish a directory result returned by the host's I/O worker.
+    pub fn finish_directory(&mut self, result: Result<Vec<plx_smb::provider::MediaEntry>, String>) {
+        match result {
+            Ok(entries) => self.files.set_entries(entries.into_iter().map(|entry| FileItem {
+                name: entry.name, path: entry.path,
+                kind: match entry.kind {
+                    plx_smb::provider::EntryKind::Folder => FileKind::Folder,
+                    plx_smb::provider::EntryKind::Video => FileKind::Video,
+                    plx_smb::provider::EntryKind::Subtitle => FileKind::Subtitle,
+                    plx_smb::provider::EntryKind::Other => FileKind::Other,
+                }, size_bytes: entry.size_bytes,
+            }).collect()),
+            Err(error) => self.files.set_error(Some(error)),
+        }
+    }
     pub fn remove_source(&mut self, source_id: &str) -> Result<(), String> {
         self.vault.remove_source(source_id)?;
         self.refresh_sources();
