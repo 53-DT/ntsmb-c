@@ -138,6 +138,7 @@ impl AccountInputs {
     /// one. The row is hidden then, the same way a server-only session's is — it would open #132's
     /// read-out and nothing else. No verdict (never asked, plex.tv unreachable) keeps the row,
     /// because the row is what asks.
+    #[cfg(test)]
     fn of(acc: &Account, switch_refused: bool) -> Self {
         Self {
             name: acc.name.clone(),
@@ -697,8 +698,7 @@ impl AuthLike for MenuHost {
             code: std::sync::Arc::from(""), png: std::sync::Arc::from(Vec::<u8>::new()),
             code_replaced: false, users: std::sync::Arc::from(Vec::new()),
             seated: std::sync::Arc::from(""),
-            error: std::sync::Arc::from(""), pin_denied: false, profile: None,
-            scope: plx_session::auth::owner::ProfileScope(0), delete_leftovers: 0,
+            error: std::sync::Arc::from(""), pin_denied: false, profile: None,            scope: plx_session::auth::owner::ProfileScope(0), delete_leftovers: 0,
             persistence_warning: None, incident: None, link_trouble: false,
             discovery_retry: None, plaintext: None, account: None,
             switch_refused, readout_back_resumes: false,
