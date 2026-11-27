@@ -302,10 +302,10 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
         }
         if app.page == DeckFilesPage::Player { update_player_snapshot(&mut app, &player, &current_title); }
 
-        plx_gfx::egl::frame_damage();
         {
             #[cfg(feature = "threadcheck")]
             let _draw_scope = plx_base::task::watchdog::draw_scope();
+            plx_gfx::egl::frame_damage();
             let (vx, vy, vw, vh) = plx_base::surface::viewport();
             unsafe { glViewport(vx, vy, vw, vh); }
             plx_gfx::gfx::field_frame_begin();
