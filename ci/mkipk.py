@@ -256,7 +256,7 @@ def stage_resources(repo: Path, data: Path, app: dict) -> list:
         # Rewritten rather than copied, so the staged bytes are this script's output on every host:
         # `ensure_ascii=False` keeps the translations readable in the archive, UTF-8 with no BOM is
         # LG's stated requirement for non-Latin text, and the key order is the input file's.
-        body = json.dumps({**loc, "title": loc["title"] + suffix},
+        body = json.dumps({**loc, "title": base_title + suffix},
                           ensure_ascii=False, indent=2) + "\n"
         (out_dir / "appinfo.json").write_bytes(body.encode("utf-8"))
         locales.append(loc_dir.name)
