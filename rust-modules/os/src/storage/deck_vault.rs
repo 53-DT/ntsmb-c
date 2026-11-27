@@ -9,13 +9,14 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const FILE_NAME: &str = "deckfiles_settings.json";
+const SOURCES_FILE: &str = "deckfiles_sources.json";
+const SETTINGS_FILE: &str = "deckfiles_settings.json";
 const FORMAT_VERSION: u32 = 1;
 const MAX_SOURCES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SourceKind { #[default] Smb, Local, GoogleDrive, WebDav }
+pub enum SourceKind { #[default] Smb, Local, GoogleDriveSlot, WebDavSlot }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SourceRecord {
@@ -137,50 +138,65 @@ impl std::fmt::Debug for CredentialRecord {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct VaultFile {
     format: u32,
-    settings: DeckSettings,
     sources: Vec<SourceRecord>,
     credentials: BTreeMap<String, CredentialRecord>,
 }
 impl Default for VaultFile {
-    fn default() -> Self { Self { format: FORMAT_VERSION, settings: DeckSettings::default(), sources: Vec::new(), credentials: BTreeMap::new() } }
+    fn default() -> Self { Self { format: FORMAT_VERSION, sources: Vec::new(), credentials: BTreeMap::new() } }
 }
 
-/// One process-local view of the app-data vault. Mutations are persisted atomically.
-pub struct DeckVault { path: PathBuf, data: VaultFile }
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SettingsFile { format: u32, settings: DeckSettings }
+
+/// One process-local view of DeckFiles' provider-neutral metadata and app-wide preferences.
+pub struct DeckVault {
+    sources_path: PathBuf,
+    settings_path: PathBuf,
+    data: VaultFile,
+    settings: DeckSettings,
+}
 
 impl DeckVault {
-    /// Load the vault from an app data directory, creating that directory if necessary.
     pub fn load(app_data_dir: impl AsRef<Path>) -> Result<Self, String> {
         let dir = app_data_dir.as_ref();
         fs::create_dir_all(dir).map_err(|_| "Could not open DeckFiles storage".to_string())?;
-        let path = dir.join(FILE_NAME);
-        let data = match fs::read(&path) {
+        let sources_path = dir.join(SOURCES_FILE);
+        let settings_path = dir.join(SETTINGS_FILE);
+        let data = match fs::read(&sources_path) {
             Ok(bytes) => {
-                let parsed: VaultFile = serde_json::from_slice(&bytes).map_err(|_| "DeckFiles storage is invalid".to_string())?;
+                let parsed: VaultFile = serde_json::from_slice(&bytes).map_err(|_| "DeckFiles source storage is invalid".to_string())?;
                 if parsed.format != FORMAT_VERSION || parsed.sources.len() > MAX_SOURCES {
-                    return Err("Unsupported DeckFiles storage version".into());
+                    return Err("Unsupported DeckFiles source storage version".into());
                 }
                 parsed
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => VaultFile::default(),
-            Err(_) => return Err("Could not read DeckFiles storage".into()),
+            Err(_) => return Err("Could not read DeckFiles source storage".into()),
         };
-        let vault = Self { path, data };
-        if !vault.path.exists() { vault.persist()?; }
+        let settings = match fs::read(&settings_path) {
+            Ok(bytes) => {
+                let parsed: SettingsFile = serde_json::from_slice(&bytes).map_err(|_| "DeckFiles settings are invalid".to_string())?;
+                if parsed.format != FORMAT_VERSION { return Err("Unsupported DeckFiles settings version".into()); }
+                parsed.settings
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => DeckSettings::default(),
+            Err(_) => return Err("Could not read DeckFiles settings".into()),
+        };
+        let vault = Self { sources_path, settings_path, data, settings };
+        if !vault.sources_path.exists() { vault.persist_sources()?; }
+        if !vault.settings_path.exists() { vault.persist_settings()?; }
         Ok(vault)
     }
 
     pub fn list_sources(&self) -> &[SourceRecord] { &self.data.sources }
-    pub fn load_settings(&self) -> DeckSettings { self.data.settings.clone() }
+    pub fn load_settings(&self) -> DeckSettings { self.settings.clone() }
 
     pub fn save_settings(&mut self, settings: DeckSettings) -> Result<(), String> {
         validate_settings(&settings)?;
-        self.data.settings = settings;
-        self.persist()
+        self.settings = settings;
+        self.persist_settings()
     }
 
-    /// Upsert metadata and, when supplied, seal the credential with the TV's secure store.
-    /// Plaintext is never copied into the vault's serializable state or written to disk.
     pub fn upsert_source(&mut self, mut record: SourceRecord, optional_secret: Option<&str>) -> Result<(), String> {
         if record.id.trim().is_empty() || record.label.trim().is_empty() { return Err("Source identity and label are required".into()); }
         if let Some(secret) = optional_secret {
@@ -200,7 +216,7 @@ impl DeckVault {
             if self.data.sources.len() >= MAX_SOURCES { return Err("Too many saved sources".into()); }
             self.data.sources.push(record);
         }
-        self.persist()
+        self.persist_sources()
     }
 
     pub fn unseal_secret(&self, id: &str) -> Option<String> {
@@ -216,7 +232,7 @@ impl DeckVault {
         if let Some(source) = self.data.sources.iter_mut().find(|source| source.id == id) {
             source.has_saved_credential = false;
         }
-        self.persist()
+        self.persist_sources()
     }
 
     pub fn remove_source(&mut self, id: &str) -> Result<(), String> {
@@ -224,21 +240,31 @@ impl DeckVault {
         if let Some(record) = self.data.credentials.remove(id) {
             crate::tv::secure::remove(&record.sealed.backend, &record.sealed.key);
         }
-        self.persist()
+        self.persist_sources()
     }
 
-    fn persist(&self) -> Result<(), String> {
-        let bytes = serde_json::to_vec_pretty(&self.data).map_err(|_| "Could not encode DeckFiles storage".to_string())?;
-        let parent = self.path.parent().ok_or_else(|| "Invalid DeckFiles storage path".to_string())?;
-        let temp = parent.join(format!(".{FILE_NAME}.tmp"));
-        let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&temp)
-            .map_err(|_| "Could not write DeckFiles storage".to_string())?;
-        file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|_| "Could not write DeckFiles storage".to_string())?;
-        drop(file);
-        fs::rename(&temp, &self.path).map_err(|_| "Could not commit DeckFiles storage".to_string())?;
-        if let Ok(dir) = OpenOptions::new().read(true).open(parent) { let _ = dir.sync_all(); }
-        Ok(())
+    fn persist_sources(&self) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(&self.data).map_err(|_| "Could not encode DeckFiles source storage".to_string())?;
+        atomic_write(&self.sources_path, &bytes, SOURCES_FILE)
     }
+
+    fn persist_settings(&self) -> Result<(), String> {
+        let value = SettingsFile { format: FORMAT_VERSION, settings: self.settings.clone() };
+        let bytes = serde_json::to_vec_pretty(&value).map_err(|_| "Could not encode DeckFiles settings".to_string())?;
+        atomic_write(&self.settings_path, &bytes, SETTINGS_FILE)
+    }
+}
+
+fn atomic_write(path: &Path, bytes: &[u8], file_name: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| "Invalid DeckFiles storage path".to_string())?;
+    let temp = parent.join(format!(".{file_name}.tmp"));
+    let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&temp)
+        .map_err(|_| "Could not write DeckFiles storage".to_string())?;
+    file.write_all(bytes).and_then(|_| file.sync_all()).map_err(|_| "Could not write DeckFiles storage".to_string())?;
+    drop(file);
+    fs::rename(&temp, path).map_err(|_| "Could not commit DeckFiles storage".to_string())?;
+    if let Ok(dir) = OpenOptions::new().read(true).open(parent) { let _ = dir.sync_all(); }
+    Ok(())
 }
 
 fn validate_settings(settings: &DeckSettings) -> Result<(), String> {

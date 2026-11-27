@@ -13,6 +13,9 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+// DeckFiles stores provider-neutral source records and settings alongside the OS storage APIs.
+pub mod deck_vault;
+
 // The canonical DB8 engine is introduced before its transport/adapters replace JsonStore.
 pub mod client;
 pub mod diagnostics;

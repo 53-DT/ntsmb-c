@@ -1,6 +1,6 @@
 //! Provider-neutral source contract and concrete SMB/local adapters for DeckFiles.
 use crate::{connect_server_blocking, Entry, Session};
-use plx_os::deck_vault::{DeckVault, SourceRecord};
+use plx_os::storage::deck_vault::{DeckVault, SourceRecord};
 pub use plx_os::deck_vault::SourceKind;
 use std::path::{Path, PathBuf};
 
@@ -213,7 +213,7 @@ impl SourceProvider for LocalProvider {
 /// Providers are deliberately registered in one place; unavailable cloud slots do not pretend to connect.
 pub struct GoogleDriveSlot;
 impl SourceProvider for GoogleDriveSlot {
-    fn kind(&self) -> SourceKind { SourceKind::GoogleDrive }
+    fn kind(&self) -> SourceKind { SourceKind::GoogleDriveSlot }
     fn display_name(&self) -> &'static str { "Google Drive" }
     fn available(&self) -> bool { false }
     fn connect(&self, _: &ConnectPayload, _: &mut DeckVault) -> Result<SourceRecord,String> { Err("Google Drive provider is not installed yet".into()) }
@@ -224,7 +224,7 @@ impl SourceProvider for GoogleDriveSlot {
 
 pub struct WebDavSlot;
 impl SourceProvider for WebDavSlot {
-    fn kind(&self) -> SourceKind { SourceKind::WebDav }
+    fn kind(&self) -> SourceKind { SourceKind::WebDavSlot }
     fn display_name(&self) -> &'static str { "WebDAV" }
     fn available(&self) -> bool { false }
     fn connect(&self, _: &ConnectPayload, _: &mut DeckVault) -> Result<SourceRecord,String> { Err("WebDAV provider is not installed yet".into()) }
@@ -248,9 +248,32 @@ fn media_entry(entry: Entry, parent: &str) -> MediaEntry {
     let path = if parent.trim_matches('/').is_empty() { entry.name.clone() } else { format!("{}/{}", parent.trim_matches('/'), entry.name) };
     MediaEntry { name: entry.name, path, is_dir: entry.is_directory, kind, size_bytes: entry.size }
 }
+fn natural_cmp(left: &str, right: &str) -> std::cmp::Ordering {
+    let mut a = left.chars().peekable();
+    let mut b = right.chars().peekable();
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, _) => return std::cmp::Ordering::Less,
+            (_, None) => return std::cmp::Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let mut an = String::new(); while a.peek().is_some_and(|c| c.is_ascii_digit()) { an.push(a.next().unwrap()); }
+                let mut bn = String::new(); while b.peek().is_some_and(|c| c.is_ascii_digit()) { bn.push(b.next().unwrap()); }
+                let az = an.trim_start_matches('0'); let bz = bn.trim_start_matches('0');
+                let order = az.len().cmp(&bz.len()).then_with(|| az.cmp(bz)).then_with(|| an.len().cmp(&bn.len()));
+                if order != std::cmp::Ordering::Equal { return order; }
+            }
+            (Some(x), Some(y)) => {
+                let order = x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase());
+                a.next(); b.next();
+                if order != std::cmp::Ordering::Equal { return order; }
+            }
+        }
+    }
+}
 fn extension(name: &str) -> String { name.rsplit_once('.').map(|(_,e)| e.to_ascii_lowercase()).unwrap_or_default() }
 fn sort_entries(rows: &mut [MediaEntry]) {
-    rows.sort_by(|a,b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.name.cmp(&b.name)));
+    rows.sort_by(|a,b| b.is_dir.cmp(&a.is_dir).then_with(|| natural_cmp(&a.name, &b.name)).then_with(|| a.name.cmp(&b.name)));
 }
 fn playlist_context(entries: &[Entry], parent: &str, current: &str) -> (Vec<String>, Vec<String>) {
     let stem = current.rsplit_once('.').map(|(s,_)| s).unwrap_or(current).to_lowercase();
