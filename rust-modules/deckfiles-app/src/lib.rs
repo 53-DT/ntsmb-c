@@ -254,7 +254,7 @@ impl DeckFilesApp {
                     },
                     SourceProviderChoice::GoogleDrive => None,
                 };
-                if let Some(target) = target { if !(self.add_source.draft.provider == SourceProviderChoice::Smb && self.add_source.draft.guest && field == 5) { target.pop(); } }
+                if let Some(target) = target { if !(self.add_source.draft.provider == SourceProviderChoice::Smb && self.add_source.draft.guest && field == 3) { target.pop(); } }
             }
             DeckFilesInput::Confirm => match self.page {
                 DeckFilesPage::Files if self.remote.zone()==FocusZone::Sidebar => {
