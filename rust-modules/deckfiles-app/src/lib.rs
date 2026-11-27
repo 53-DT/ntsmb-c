@@ -41,6 +41,7 @@ pub enum DeckFilesInput {
 pub enum DeckFilesAction {
     None,
     ListDirectory { source_id: String, path: String },
+    DiscoverShares(ConnectPayload),
     Connect(ConnectPayload),
     PreparePlayback { source_id: String, path: String },
     SaveSettings,
@@ -190,13 +191,13 @@ impl DeckFilesApp {
             }
             DeckFilesInput::Up => match self.page {
                 DeckFilesPage::Files => if self.remote.zone()==FocusZone::Sidebar { self.remote.move_sidebar(-1,3+self.files.sources.len()); } else { self.files.move_selection(-1); },
-                DeckFilesPage::AddSource => self.add_source.move_focus(-1),
+                DeckFilesPage::AddSource => if self.add_source.state==deckfiles_screens::add_source_modal::ConnectState::SelectingShare { self.add_source.move_share(-1); } else { self.add_source.move_focus(-1); },
                 DeckFilesPage::Settings => self.settings.move_row(-1),
                 DeckFilesPage::Player => { let _=self.player.handle_key(deckfiles_screens::deck_player::PlayerKey::Up); }
             },
             DeckFilesInput::Down => match self.page {
                 DeckFilesPage::Files => if self.remote.zone()==FocusZone::Sidebar { self.remote.move_sidebar(1,3+self.files.sources.len()); } else { self.files.move_selection(1); },
-                DeckFilesPage::AddSource => self.add_source.move_focus(1),
+                DeckFilesPage::AddSource => if self.add_source.state==deckfiles_screens::add_source_modal::ConnectState::SelectingShare { self.add_source.move_share(1); } else { self.add_source.move_focus(1); },
                 DeckFilesPage::Settings => self.settings.move_row(1),
                 DeckFilesPage::Player => { let _=self.player.handle_key(deckfiles_screens::deck_player::PlayerKey::Down); }
             },
@@ -231,8 +232,7 @@ impl DeckFilesApp {
                 let target = match self.add_source.draft.provider {
                     SourceProviderChoice::Smb => match field {
                         0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.host),
-                        3 => Some(&mut self.add_source.draft.share), 4 => Some(&mut self.add_source.draft.username),
-                        5 => Some(&mut self.add_source.draft.password), _ => None,
+                        2 => Some(&mut self.add_source.draft.username), 3 => Some(&mut self.add_source.draft.password), _ => None,
                     },
                     SourceProviderChoice::Local => match field {
                         0 => Some(&mut self.add_source.draft.label), 1 => Some(&mut self.add_source.draft.local_folder), _ => None,
@@ -289,21 +289,31 @@ impl DeckFilesApp {
                     }
                 },
                 DeckFilesPage::AddSource => {
-                    match self.add_source.focused_field {
-                        6 if self.add_source.draft.provider == SourceProviderChoice::Smb => { self.add_source.draft.guest = !self.add_source.draft.guest; if self.add_source.draft.guest { self.add_source.draft.password.clear(); self.add_source.draft.save_password=false; } self.add_source.error=None; },
-                        7 if self.add_source.draft.provider == SourceProviderChoice::Smb => { if !self.add_source.draft.guest { self.add_source.draft.save_password = !self.add_source.draft.save_password; } },
-                        index if index == self.add_source.field_count().saturating_sub(1) => if let Ok(draft) = self.add_source.begin_connect() {
-                    let kind = match draft.provider {
-                        SourceProviderChoice::Smb => SourceKind::Smb,
-                        SourceProviderChoice::Local => SourceKind::Local,
-                        SourceProviderChoice::GoogleDrive => SourceKind::GoogleDriveSlot,
-                    };
-                    return DeckFilesAction::Connect(ConnectPayload {
-                        kind, label: draft.label, host: draft.host, port: draft.port, share: draft.share,
-                        username: draft.username, guest: draft.guest, save_password: draft.save_password,
-                        secret: (!draft.guest).then_some(draft.password), root_path: draft.local_folder,
-                    });
-                        }, _ => {}
+                    if self.add_source.state == deckfiles_screens::add_source_modal::ConnectState::SelectingShare {
+                        if let Ok(draft)=self.add_source.begin_save_selected_share() {
+                            return DeckFilesAction::Connect(ConnectPayload { kind:SourceKind::Smb,
+                                label:draft.label,host:draft.host,port:draft.port,share:draft.share,
+                                username:draft.username,guest:draft.guest,save_password:draft.save_password,
+                                secret:(!draft.guest).then_some(draft.password),root_path:String::new() });
+                        }
+                    } else {
+                        match self.add_source.focused_field {
+                            4 if self.add_source.draft.provider==SourceProviderChoice::Smb => {
+                                self.add_source.draft.guest=!self.add_source.draft.guest;
+                                if self.add_source.draft.guest {self.add_source.draft.password.clear();self.add_source.draft.save_password=false;}
+                                self.add_source.error=None;
+                            },
+                            5 if self.add_source.draft.provider==SourceProviderChoice::Smb => {
+                                if !self.add_source.draft.guest {self.add_source.draft.save_password=!self.add_source.draft.save_password;}
+                            },
+                            index if index==self.add_source.field_count().saturating_sub(1) => if let Ok(draft)=self.add_source.begin_connect() {
+                                let kind=match draft.provider {SourceProviderChoice::Smb=>SourceKind::Smb,SourceProviderChoice::Local=>SourceKind::Local,SourceProviderChoice::GoogleDrive=>SourceKind::GoogleDriveSlot};
+                                let payload=ConnectPayload {kind,label:draft.label,host:draft.host,port:draft.port,share:String::new(),username:draft.username,
+                                    guest:draft.guest,save_password:draft.save_password,secret:(!draft.guest).then_some(draft.password),root_path:draft.local_folder};
+                                if kind==SourceKind::Smb {return DeckFilesAction::DiscoverShares(payload);}
+                                return DeckFilesAction::Connect(payload);
+                            }, _=>{}
+                        }
                     }
                 },
                 DeckFilesPage::Settings => return DeckFilesAction::SaveSettings,
@@ -320,6 +330,8 @@ impl DeckFilesApp {
     }
 
     /// Publish the result of an asynchronous connection attempt.
+    pub fn finish_discover_shares(&mut self, result: Result<Vec<String>, String>) { self.add_source.finish_discover_shares(result); }
+
     pub fn finish_connect(&mut self, result: Result<String, String>) {
         match result {
             Ok(_) => { self.add_source.finish_connect(Ok(())); self.page = DeckFilesPage::Files; self.refresh_sources(); }
