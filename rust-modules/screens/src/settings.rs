@@ -697,8 +697,7 @@ impl<H: DirectoryLike> Machine<H> for RouteSurface {
                 // answer it — which for a modal is the dismissal, but for the stack underneath is
                 // `Rig::back_at_root` and the television's own Home. Routing BACK through
                 // `request` instead would swallow the press as `Handled::Yes` and hand the
-                // container a `Dismiss` it never got first refusal on; `back_at_the_surface_s_own_                // root_is_not_handled` and `left_at_the_surfaces_own_root_dismisses_it` are the
-                // two ends of that.
+                // container a `Dismiss` it never got first refusal on; `back_at_the_surface_s_own_                // root_is_not_handled` and `left_at_the_surfaces_own_root_dismisses_it` are the                // two ends of that.
                 let back = matches!(
                     iev.kind,
                     plx_machine::machine::InputKind::Key {
@@ -1079,6 +1078,7 @@ struct ServerMachineId(String);
 /// by. Its focus key ([`FormId::key`]) is hand-assigned below and unrelated to the row's position,
 /// so reordering the form moves no key; every key stays below `registry::BAND`.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)] // NT-SMB retains the shared settings identity map; some FinNative rows are intentionally absent.
 enum RootId {
     Favourites,
     UnderPosters,
@@ -1397,8 +1397,7 @@ fn root_form(inputs: &RootInputs) -> Form<RootId, Action, SettingsPage> {
             // carries it now), which has to stay beside the switch it describes.
             plaintext = plaintext.item_keyed(
                 RootId::Plaintext(row.machine.clone()),                RowKey(PLAINTEXT_KEY_BASE + i as u32),
-                RowKind::Toggle,
-                Action::Plaintext(row.machine.clone()),
+                RowKind::Toggle,                Action::Plaintext(row.machine.clone()),
                 label
                     .detail(plaintext_question::settings_detail(row.on, row.connected))
                     .toggle(row.on),
@@ -2097,8 +2096,7 @@ impl LanguagePage {
         if success { self.state.selected = *preference; }
         self.state.failed = !success;        self.state.busy = false;
         self.save = None;
-        self.rebuild();
-        true
+        self.rebuild();        true
     }
 }
 
