@@ -29,6 +29,19 @@ const DISPLAY: &dyn plx_os::tv::sink::DisplaySink = SINK;
 /// together.
 const INSTALL_DIR: &str = "/media/developer/apps/usr/palm/applications/io.github.53-dt.deckfiles";
 
+/// webOS mounts the application payload read-only (the TV reports EACCES for app_dir), so
+/// persistent app records must live outside the installed package. Developer Mode exposes
+/// /media/developer as a writable persistent mount; keep debug/stable/nightly records isolated
+/// by the actual installed app id. Homebrew installs use the per-install writable runtime root.
+fn deckfiles_state_root() -> std::path::PathBuf {
+    if plx_base::paths::install_kind() == "devmode" {
+        std::path::PathBuf::from("/media/developer/DeckFiles")
+            .join(plx_base::paths::app_id())
+    } else {
+        plx_base::paths::runtime_dir().join("state")
+    }
+}
+
 /// What the lower layers read: the webOS identity, key manager, Home key and toast, the storage helper
 /// and the native playback seam. The window, the bus pump and the frame probe are the loop's own, in [`PLATFORM`].
 static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
@@ -56,7 +69,7 @@ static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
     // payload's last resort when `/proc/self/exe` cannot be read (not expected on a device).
     layout: plx_os::tv::Layout {
         payload_dir: plx_os::tv::Layout::DERIVED.payload_dir,
-        state_root: plx_os::tv::Layout::DERIVED.state_root,
+        state_root: deckfiles_state_root,
         fallback_dir: INSTALL_DIR,
     },
     // What this television's firmwares answer to, in the order worth trying (`plx_base::dynlib::Handle::open`:
