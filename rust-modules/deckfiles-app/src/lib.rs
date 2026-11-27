@@ -21,6 +21,8 @@ use plx_smb::provider::{
     ConnectPayload, PreparedSourcePlay, SourceRegistry,
 };
 use plx_ui::{Painter, Rect};
+pub mod remote_control;
+use remote_control::{FocusZone, RemoteControl};
 
 /// Which DeckFiles surface is currently visible.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -51,6 +53,7 @@ pub struct DeckFilesApp {
     pub add_source: AddSourceModal,
     pub settings: DeckSettingsScreen,
     pub player: DeckPlayerScreen,
+    pub remote: RemoteControl,
 }
 
 impl DeckFilesApp {
@@ -71,6 +74,7 @@ impl DeckFilesApp {
             add_source: AddSourceModal::new(),
             settings: DeckSettingsScreen::new(settings, credentials),
             player: DeckPlayerScreen::new(PlayerSnapshot::default()),
+            remote: RemoteControl::default(),
         };
         app.refresh_sources();
         app
@@ -79,7 +83,7 @@ impl DeckFilesApp {
     /// Draw the currently selected DeckFiles surface.
     pub fn draw(&self, painter: Painter, bounds: Rect) {
         match self.page {
-            DeckFilesPage::Files => self.files.draw(painter, bounds),
+            DeckFilesPage::Files => self.files.draw_with_focus(painter, bounds, if self.remote.zone()==FocusZone::Sidebar {Some(self.remote.sidebar_index())} else {None}),
             DeckFilesPage::AddSource => self.add_source.draw(painter, bounds),
             DeckFilesPage::Settings => self.settings.draw(painter, bounds),
             DeckFilesPage::Player => self.player.draw(painter, bounds),
@@ -162,7 +166,7 @@ impl DeckFilesApp {
     pub fn handle_input(&mut self, input: DeckFilesInput) -> DeckFilesAction {
         use deckfiles_screens::add_source_modal::SourceProviderChoice;
         match input {
-            DeckFilesInput::OpenFiles => self.page = DeckFilesPage::Files,
+            DeckFilesInput::OpenFiles => { self.page = DeckFilesPage::Files; self.remote.focus_content(); },
             DeckFilesInput::OpenAddSource => { self.add_source.cancel(); self.page = DeckFilesPage::AddSource; }
             DeckFilesInput::OpenSettings => { self.reload_settings(); self.page = DeckFilesPage::Settings; }
             DeckFilesInput::CycleSource(delta) if self.page == DeckFilesPage::Files => {
@@ -183,15 +187,24 @@ impl DeckFilesApp {
                 }
             }
             DeckFilesInput::Up => match self.page {
-                DeckFilesPage::Files => self.files.move_selection(-1),
-                DeckFilesPage::AddSource => self.add_source.move_focus(-1), _ => {}
+                DeckFilesPage::Files => if self.remote.zone()==FocusZone::Sidebar { self.remote.move_sidebar(-1,3+self.files.sources.len()); } else { self.files.move_selection(-1); },
+                DeckFilesPage::AddSource => self.add_source.move_focus(-1),
+                DeckFilesPage::Settings => self.settings.move_row(-1),
+                DeckFilesPage::Player => { let _=self.player.handle_key(deckfiles_screens::deck_player::PlayerKey::Up); }
             },
             DeckFilesInput::Down => match self.page {
-                DeckFilesPage::Files => self.files.move_selection(1),
-                DeckFilesPage::AddSource => self.add_source.move_focus(1), _ => {}
+                DeckFilesPage::Files => if self.remote.zone()==FocusZone::Sidebar { self.remote.move_sidebar(1,3+self.files.sources.len()); } else { self.files.move_selection(1); },
+                DeckFilesPage::AddSource => self.add_source.move_focus(1),
+                DeckFilesPage::Settings => self.settings.move_row(1),
+                DeckFilesPage::Player => { let _=self.player.handle_key(deckfiles_screens::deck_player::PlayerKey::Down); }
             },
             DeckFilesInput::Left if self.page == DeckFilesPage::AddSource => self.add_source.move_focus(-1),
+            DeckFilesInput::Left if self.page == DeckFilesPage::Files && self.remote.zone()==FocusZone::Sidebar => self.remote.focus_content(),
+            DeckFilesInput::Left if self.page == DeckFilesPage::Files && self.files.current_path.is_empty() => self.remote.focus_sidebar(),
+            DeckFilesInput::Left if self.page == DeckFilesPage::Settings => { let i=SettingsRoot::ALL.iter().position(|r|*r==self.settings.selected_root).unwrap_or(0); self.settings.select_root(SettingsRoot::ALL[i.saturating_sub(1)]); },
             DeckFilesInput::Right | DeckFilesInput::NextField if self.page == DeckFilesPage::AddSource => self.add_source.move_focus(1),
+            DeckFilesInput::Right if self.page == DeckFilesPage::Files && self.remote.zone()==FocusZone::Sidebar => self.remote.focus_content(),
+            DeckFilesInput::Right if self.page == DeckFilesPage::Settings => { let i=SettingsRoot::ALL.iter().position(|r|*r==self.settings.selected_root).unwrap_or(0); self.settings.select_root(SettingsRoot::ALL[(i+1).min(SettingsRoot::ALL.len()-1)]); },
             DeckFilesInput::Left if self.page == DeckFilesPage::Files && !self.files.current_path.is_empty() => {
                 if let (Some(source_id), Some(path)) = (self.files.active_source.clone(), self.files.go_back()) {
                     self.files.set_loading(true);
@@ -253,6 +266,14 @@ impl DeckFilesApp {
                 if let Some(target) = target { if !(self.add_source.draft.provider == SourceProviderChoice::Smb && self.add_source.draft.guest && field == 5) { target.pop(); } }
             }
             DeckFilesInput::Confirm => match self.page {
+                DeckFilesPage::Files if self.remote.zone()==FocusZone::Sidebar => {
+                    match self.remote.sidebar_index() {
+                        0 => self.remote.focus_content(),
+                        1 => { self.reload_settings(); self.page=DeckFilesPage::Settings; },
+                        2 => { self.add_source.cancel(); self.page=DeckFilesPage::AddSource; self.add_source.focused_field=0; },
+                        index => if let Some(source)=self.files.sources.get(index-3).filter(|s|s.available).cloned() { if self.files.choose_source(&source.id) { self.files.set_loading(true); return DeckFilesAction::ListDirectory{source_id:source.id,path:String::new()}; } },
+                    }
+                },
                 DeckFilesPage::Files => if let Some(entry) = self.files.selected_entry().cloned() {
                     if let Some(source_id) = self.files.active_source.clone() {
                         if entry.is_folder() {
@@ -288,7 +309,7 @@ impl DeckFilesApp {
             },
             DeckFilesInput::Back => match self.page {
                 DeckFilesPage::AddSource => { self.add_source.cancel(); self.page = DeckFilesPage::Files; }
-                DeckFilesPage::Settings | DeckFilesPage::Player => self.page = DeckFilesPage::Files,
+                DeckFilesPage::Settings | DeckFilesPage::Player => { self.page = DeckFilesPage::Files; self.remote.focus_content(); },
                 DeckFilesPage::Files => {},
             },
             _ => {},
