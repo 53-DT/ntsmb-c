@@ -36,7 +36,7 @@ default = ["play-uri", "play-feed", "devtools", "devtriggers", "threadcheck"]
 # worker and the native packet-feed bindings live in `webos/`, so only a build that includes the
 # backend compiles them.
 play-uri = ["plxnative-modules/play-uri", "uri-transport"]
-play-feed = ["plxnative-modules/play-feed", "feed-sink"]
+play-feed = ["plxnative-modules/play-feed", "feed-sink", "dep:plx_play_feed"]
 # Native packet-feed bindings; display binding is independently available.
 feed-sink = []
 # The real com.webos.media LS2 worker. The URI interface and NoUriMedia remain available without it.
@@ -62,6 +62,8 @@ plx_base = { path = "../base" }
 plx_os = { path = "../os" }
 plx_gfx = { path = "../gfx" }
 plx_media = { path = "../media" }
+plx_media_codecs = { path = "../media-codecs" }
+plx_play_feed = { path = "../play-feed", optional = true }
 plx_smb = { path = "../smb", features = ["playback"] }
 plx_ui = { path = "../ui" }
 plx_telemetry = { path = "../telemetry" }
