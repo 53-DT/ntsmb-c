@@ -41,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -79,15 +80,19 @@ def codegen_flags() -> str:
 
 
 def config_flags(text: str | None = None) -> str:
-    """The `rustflags` list of the armv7 target table in rust-modules/.cargo/config.toml, space-joined."""
+    """The target rustflags list of rust-modules/.cargo/config.toml, space-joined."""
     text = CONFIG.read_text() if text is None else text
-    table = re.search(r"^\[target\." + re.escape(TARGET) + r"\]\s*\n(?P<body>(?:(?!\[).*\n?)*)", text, re.M)
-    if not table:
-        raise ValueError(f"no [target.{TARGET}] table in {CONFIG}")
-    flags = re.search(r"^rustflags\s*=\s*\[(?P<items>[^\]]*)\]", table.group("body"), re.M)
-    if not flags:
-        raise ValueError(f"[target.{TARGET}] has no rustflags list")
-    return " ".join(re.findall(r'"([^"]*)"', flags.group("items")))
+    try:
+        config = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"invalid TOML in {CONFIG}: {error}") from error
+    try:
+        flags = config["target"][TARGET]["rustflags"]
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"no [target.{TARGET}] rustflags list in {CONFIG}") from error
+    if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
+        raise ValueError(f"[target.{TARGET}] rustflags must be a list of strings")
+    return " ".join(flags)
 
 
 def classify(asm: str) -> dict[str, int]:

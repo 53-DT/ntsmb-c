@@ -21,6 +21,7 @@ use plx_smb::provider::{
     ConnectPayload, PreparedSourcePlay, SourceRegistry,
 };
 use plx_ui::{Painter, Rect};
+pub mod random;
 pub mod remote_control;
 use remote_control::{FocusZone, RemoteControl};
 

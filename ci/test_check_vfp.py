@@ -87,7 +87,7 @@ class FlagLists(unittest.TestCase):
 
     def test_the_makefiles_arm_rustflags_start_with_those_flags(self):
         text = (ROOT / "Makefile").read_text()
-        self.assertRegex(text, r'(?m)^RUST_ENV = RUSTFLAGS="\$\(RUST_CODEGEN\) ')
+        self.assertIn("RUST_ENV = RUSTFLAGS='$(RUST_CODEGEN)", text)
         self.assertNotRegex(text, r"RUSTFLAGS=\"-C target-cpu")
 
     def test_config_flags_parses_a_table_and_refuses_a_missing_one(self):

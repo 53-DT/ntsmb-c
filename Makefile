@@ -453,8 +453,8 @@ RUST_CAPLINTS = --cap-lints=warn
 endif
 # The codegen flags alone, so ci/check-vfp.py can compile its probe with exactly these
 # (`make -s print-rust-codegen`) and compare them with rust-modules/.cargo/config.toml.
-RUST_CODEGEN = -C target-cpu=cortex-a9 -C target-feature=-neon,-soft-float -C force-frame-pointers=yes
-RUST_ENV = RUSTFLAGS="$(RUST_CODEGEN) $(RUST_DEBUGINFO) $(RUST_CAPLINTS) $(RUST_REMAP)"
+RUST_CODEGEN = --cfg getrandom_backend="custom" -C target-cpu=cortex-a9 -C target-feature=-neon,-soft-float -C force-frame-pointers=yes
+RUST_ENV = RUSTFLAGS='$(RUST_CODEGEN) $(RUST_DEBUGINFO) $(RUST_CAPLINTS) $(RUST_REMAP)'
 # No C translation unit includes an SDL, GLES or KHR header (the Rust layers declare their own
 # `extern` signatures and read SDL structs by raw offset), so no copy of those headers is kept
 # in the repository and CFLAGS has no -Iinclude.
