@@ -186,7 +186,7 @@ endif
 # The id users get. Also `paths::STABLE_APP_ID` in the Rust half and `STABLE_ID` in ci/flavor.py —
 # three copies of one string, each in a language that cannot see the others, and ci/flavor.py's
 # selftest is what keeps them in step.
-APPID_STABLE = io.github.davetrump53ai.deckfiles
+APPID_STABLE = io.github.53-dt.deckfiles
 APPID        = $(if $(filter stable,$(FLAVOR)),$(APPID_STABLE),$(APPID_STABLE).$(FLAVOR))
 APPDIR       = /media/developer/apps/usr/palm/applications/$(APPID)
 

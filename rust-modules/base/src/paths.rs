@@ -58,7 +58,7 @@ pub const ENV_STEERABLE: bool = cfg!(feature = "sim");
 ///
 /// It is a FALLBACK and a comparison value — never the answer on its own. See [`app_id`]: which
 /// app this process is depends on where it was installed, not on what it was compiled with.
-pub const STABLE_APP_ID: &str = "io.github.tiper.finnative";
+pub const STABLE_APP_ID: &str = "io.github.53-dt.deckfiles";
 
 /// The webOS Developer Mode install directory of the SHIPPED app (`io.github.tiper.finnative`).
 ///
