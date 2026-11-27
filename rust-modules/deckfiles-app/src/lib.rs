@@ -17,7 +17,7 @@ use plx_os::storage::deck_vault::{
     HudAutoHide, RecoverySettings, SkipInterval, SourceKind, SubtitleColor, SubtitlePosition,
     SubtitleSize, SubtitlesMode,
 };
-use plx_smb::provider{
+use plx_smb::provider::{
     ConnectPayload, PreparedSourcePlay, SourceRegistry,
 };
 use plx_ui::{Painter, Rect};
