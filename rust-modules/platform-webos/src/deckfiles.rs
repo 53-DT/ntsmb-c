@@ -211,12 +211,14 @@ fn process_decoded(
         Decoded::Lifecycle(Lifecycle::WillBackground | Lifecycle::DidBackground) => {
             *suspended = true;
             shell.release_surface();
+            plx_base::task::watchdog::set_foreground(false);
             let at = adapter.backend_tick();
             let _ = adapter.backend_set_foreground_at(&mut player.session, false, at);
         }
         Decoded::Lifecycle(Lifecycle::DidForeground) => {
             shell.grab_surface(surface.window());
             *suspended = false;
+            plx_base::task::watchdog::set_foreground(true);
             let at = adapter.backend_tick();
             let _ = adapter.backend_set_foreground_at(&mut player.session, true, at);
         }
@@ -234,6 +236,7 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
     shell.bind_window(window);
     shell.grab_surface(window);
     shell.arm_opaque_region();
+    plx_base::task::watchdog::set_foreground(true);
     surface.set_swap_interval(1);
     plx_gfx::egl::probe();
     if let Err(error) = plx_gfx::gfx::init_gl() {
@@ -299,23 +302,28 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
         }
         if app.page == DeckFilesPage::Player { update_player_snapshot(&mut app, &player, &current_title); }
 
+        plx_gfx::egl::frame_damage();
         let (vx, vy, vw, vh) = plx_base::surface::viewport();
         unsafe { glViewport(vx, vy, vw, vh); }
+        plx_gfx::gfx::field_frame_begin();
         plx_gfx::text::begin_frame();
         plx_gfx::gfx::straighten::frame_begin();
+        #[cfg(feature = "threadcheck")]
+        let _draw_scope = plx_base::task::watchdog::draw_scope();
         if player.video_plane_bound {
             plx_gfx::gfx::frame_clear_through();
         } else {
             let (r, g, b) = plx_ui::theme::CLEAR_RGB;
             plx_gfx::gfx::frame_clear(r, g, b);
         }
-        app.draw(Painter::root(), Rect::new(0.0, 0.0, 1920.0, 1080.0));
+        plx_ui::guard(|| app.draw(Painter::root(), Rect::new(0.0, 0.0, 1920.0, 1080.0)));
         plx_gfx::gfx::straighten::straighten_surface(player.video_plane_bound);
         shell.opaque_route(player.video_plane_bound);
         (shell.frame().present.before_swap)();
         surface.swap();
     }
 
+    plx_base::task::watchdog::set_foreground(false);
     if text_input { plx_shell_sdl::text::stop_input(); }
     if player::is_started(&player.session) == Some(true) {
         player::stop_playback(&mut player.session, &mut adapter);
