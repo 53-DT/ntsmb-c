@@ -1,5 +1,5 @@
 [package]
-name = "plx_deckfiles_app"
+name = "deckfiles-app"
 version = "0.0.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
@@ -7,14 +7,14 @@ description = "Plex-free DeckFiles application composition."
 publish = false
 
 [lib]
-name = "plx_deckfiles_app"
+name = "deckfiles_app"
 crate-type = ["rlib"]
 
 [dependencies]
 plx_os = { path = "../os" }
 plx_smb = { path = "../smb", features = ["playback"] }
 plx_playback_contract = { path = "../playback-contract" }
-plx_deckfiles_screens = { path = "../deckfiles-screens" }
+deckfiles-screens = { path = "../deckfiles-screens" }
 
 [lints]
 workspace = true

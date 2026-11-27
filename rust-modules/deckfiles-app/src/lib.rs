@@ -4,12 +4,12 @@
 //! has no dependency on the legacy app, Plex/Jellyfin clients, appkit, or legacy screen registry.
 //! Provider calls perform blocking I/O and must be invoked by the platform's worker path, not draw.
 
-use plx_deckfiles_screens::add_source_modal::AddSourceModal;
-use plx_deckfiles_screens::deck_player::{DeckPlayerScreen, PlayerSnapshot};
-use plx_deckfiles_screens::deck_settings::{
+use deckfiles_screens::add_source_modal::AddSourceModal;
+use deckfiles_screens::deck_player::{DeckPlayerScreen, PlayerSnapshot};
+use deckfiles_screens::deck_settings::{
     CredentialItem, DeckSettingsDraft, DeckSettingsScreen, SettingsRoot,
 };
-use plx_deckfiles_screens::files_browser::{
+use deckfiles_screens::files_browser::{
     FileItem, FileKind, FilesBrowserScreen, SourceItem,
 };
 use plx_os::storage::deck_vault::{
