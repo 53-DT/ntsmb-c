@@ -87,41 +87,46 @@ fn update_player_snapshot(app: &mut DeckFilesApp, player: &Player, title: &str) 
 
 fn handle_key(app: &mut DeckFilesApp, key: Key, player: &mut Player, adapter: &mut PlayerAdapter) -> Option<DeckFilesAction> {
     if app.page == DeckFilesPage::Player {
-        match key {
-            Key::Ok | Key::PlayPause => {
-                if player::is_playing(&player.session) { let _ = player::pause(&mut player.session, adapter); }
-                else { let _ = player::resume(&mut player.session, adapter); }
+        use deckfiles_screens::deck_player::{PlayerAction, PlayerKey};
+        let player_key = match key {
+            Key::Up => PlayerKey::Up,
+            Key::Down => PlayerKey::Down,
+            Key::Left { .. } => PlayerKey::Left,
+            Key::Right { .. } => PlayerKey::Right,
+            Key::Ok => PlayerKey::Ok,
+            Key::Back => PlayerKey::Back,
+            Key::Play | Key::PlayPause => PlayerKey::PlayPause,
+            Key::Pause => PlayerKey::PlayPause,
+            Key::Stop => PlayerKey::Back,
+            _ => return None,
+        };
+        if let Some(action) = app.player.handle_key(player_key) {
+            match action {
+                PlayerAction::Play => { let _ = player::resume(&mut player.session, adapter); }
+                PlayerAction::Pause => { let _ = player::pause(&mut player.session, adapter); }
+                PlayerAction::Seek(time) => {
+                    let ns = (time.as_millis().min(i64::MAX as u64 / 1_000_000) as i64) * 1_000_000;
+                    player::request_seek(&mut player.session, adapter, ns);
+                }
+                PlayerAction::Stop => {
+                    player::stop_playback(&mut player.session, adapter);
+                    app.page = DeckFilesPage::Files;
+                    app.remote.focus_content();
+                }
+                _ => {}
             }
-            Key::Play => { let _ = player::resume(&mut player.session, adapter); }
-            Key::Pause => { let _ = player::pause(&mut player.session, adapter); }
-            Key::Left { .. } => {
-                let pos = player::playpos_ns(&player.session).unwrap_or(0);
-                player::request_seek(&mut player.session, adapter, (pos - 10_000_000_000).max(0));
-            }
-            Key::Right { .. } => {
-                let pos = player::playpos_ns(&player.session).unwrap_or(0);
-                player::request_seek(&mut player.session, adapter, pos.saturating_add(10_000_000_000));
-            }
-            Key::Back | Key::Stop => {
-                player::stop_playback(&mut player.session, adapter);
-                app.page = DeckFilesPage::Files;
-            }
-            _ => {}
+        } else if key == Key::Pause {
+            let _ = player::pause(&mut player.session, adapter);
         }
         return None;
     }
     let input = match key {
         Key::Up => DeckFilesInput::Up,
         Key::Down => DeckFilesInput::Down,
-        Key::Left { .. } if app.page == DeckFilesPage::AddSource => DeckFilesInput::Left,
-        Key::Right { .. } if app.page == DeckFilesPage::AddSource => DeckFilesInput::NextField,
-        Key::Left { .. } if app.page == DeckFilesPage::Files && app.files.current_path.is_empty() => DeckFilesInput::CycleSource(-1),
-        Key::Right { .. } if app.page == DeckFilesPage::Files && app.files.current_path.is_empty() => DeckFilesInput::CycleSource(1),
         Key::Left { .. } => DeckFilesInput::Left,
         Key::Right { .. } => DeckFilesInput::Right,
         Key::Ok => DeckFilesInput::Confirm,
         Key::Back => DeckFilesInput::Back,
-        Key::Play if app.page == DeckFilesPage::AddSource => DeckFilesInput::ToggleGuest,
         Key::Play => DeckFilesInput::OpenAddSource,
         Key::Pause => DeckFilesInput::OpenSettings,
         Key::Stop if app.page == DeckFilesPage::AddSource => DeckFilesInput::ToggleGuest,
@@ -187,6 +192,12 @@ fn process_decoded(
             if sym == 8 {
                 let action = app.handle_input(DeckFilesInput::Backspace);
                 dispatch(app, action, data_dir, tx);
+                return;
+            }
+            // webOS AC_HOME (SDL scancode 269): hand the television its Home screen without
+            // terminating DeckFiles. This is DeckFiles' own remote adapter, not the legacy app.
+            if sym == 269 || wcode == Some(269) {
+                plx_os::tv::home::go_home();
                 return;
             }
             let key = classify(sym, wcode.unwrap_or(0));
