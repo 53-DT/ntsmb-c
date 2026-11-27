@@ -34,7 +34,7 @@ jobs:
       flavor: debug
       telemetry: none
       smb-smoke: true
-      artifact: smb-webos-debug-ipk-0.0.2b
+      artifact: smb-webos-debug-ipk-0.1.0
       source-asset: false
       lgpl-ffmpeg-source: true
       caches: true
