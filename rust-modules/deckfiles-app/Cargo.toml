@@ -12,6 +12,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 plx_os = { path = "../os" }
+plx_ui = { path = "../ui" }
 plx_smb = { path = "../smb", features = ["playback"] }
 plx_playback_contract = { path = "../playback-contract" }
 deckfiles-screens = { path = "../deckfiles-screens" }
