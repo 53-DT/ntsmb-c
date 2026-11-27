@@ -54,6 +54,8 @@ sim = ["plxnative-modules/sim"]
 
 [dependencies]
 plxnative-modules = { path = "..", default-features = false }
+# Compile the new Plex-free DeckFiles UI boundary as part of the television artifact.
+plx_deckfiles_screens = { path = "../deckfiles-screens" }
 plx_base = { path = "../base" }
 plx_os = { path = "../os" }
 plx_gfx = { path = "../gfx" }

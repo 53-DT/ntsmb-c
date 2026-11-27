@@ -1,0 +1,18 @@
+[package]
+name = "plx_deckfiles_screens"
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Plex-free DeckFiles screens for native source browsing and playback."
+publish = false
+
+[lib]
+name = "plx_deckfiles_screens"
+crate-type = ["rlib"]
+
+[dependencies]
+plx_ui = { path = "../ui" }
+plx_playback_contract = { path = "../playback-contract" }
+
+[lints]
+workspace = true
