@@ -1344,7 +1344,7 @@ fn root_form(inputs: &RootInputs) -> Form<RootId, Action, SettingsPage> {
             Action::Door,
             Row::new(plx_os::i18n::msg::settings_audio_title()).chevron(true),
         );
-    let connections = FormSection::new("Connections")
+    let connections = FormSection::<RootId, Action, SettingsPage>::new("Connections")
         .item(
             RootId::SwitchProfile,
             RowKind::Button,
