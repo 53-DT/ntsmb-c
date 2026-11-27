@@ -1,0 +1,990 @@
+//! Playback defaults and Plex account preferences on the shared Settings table: the two field-list
+//! pages (Playback, Audio & Subtitles) and, in [`picker`], the choice list each field pushes.
+//!
+//! **One navigation architecture.** A field row is a `Nav` item of the page's [`FormTable`]:
+//! activating it pushes `SettingsPage::Picker(field)` through [`form_activate`], the family's one
+//! activation path, so the surface's stack executor and its one push spring (`RouteSurface`'s
+//! `Push`) carry a picker exactly as they carry Legal or Privacy. This page owns no submenu, no
+//! second table and no `RoutePush`.
+//!
+//! **The picker owns its transaction.** [`PickerPage`] (a child module, so it shares this file's
+//! private `Value`/option/readout helpers without a screen naming a sibling) loads or adopts the
+//! confirmed snapshot, runs the Direct Play *Forced* acknowledgement, submits the write and pops on
+//! a durable receipt. The field-list page keeps no pending write of its own for a pick; it learns
+//! the new confirmed value through [`Txn::adopt_shared`] — the snapshot a landed load or save
+//! publishes to the UI thread's shared cell — and Local values (quality, direct play) through the
+//! session reads every tick already makes. The confirmed snapshot stays with the screens; workers
+//! return receipts and never mutate the UI, and a failed save leaves the confirmed value intact.
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::sync::mpsc::{self, Receiver};
+use plx_appkit::skip_policy::MarkerPrefsView;
+use plx_plex::plex::session::{MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UiResolution, UriEngine, QualityPref, DirectPlayModePref, SubtitleSizePref, SubtitlePositionPref, SubtitleTonePref, HdrOverlayBrightnessPref, NextEpisodeModePref, DeckPressPref, SkipIntervalPref, InstantDpadSeekingPref, UriEnginePref, DolbyVisionModePref, AudioConversionPref};
+use plx_plex::plex::account::{AudioPreferences, PreferenceError, PreferenceRequest, PreferenceSnapshot, PreferenceUpdate};
+use plx_media::route::{AudioConversion, Choice, DeckPress, DirectPlayMode, NextEpisodeMode, Quality, SkipInterval, SubtitlePosition, SubtitleSize, SubtitleTone, HdrOverlayBrightness};
+use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
+use plx_ui::frame::Budget;
+use plx_machine::machine::{Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId,
+    Handled, InputEvent, InputKind, InstanceId, Key, LogicalState, Machine, MachineId};
+use plx_ui::screen::{DrawFrame, Enter, FocusSource, FocusTarget, HitSource, RenderStrategy,
+    Screen, ScreenEvent};
+use plx_ui::table::Row;
+use plx_ui::table_screen::{Header, TableScreen};
+use plx_ui::route_screen::RouteLayout;
+use plx_ui::Rect;
+use super::family::{form_activate, form_focus, form_right_target, InnerHost, PickerKind, SettingsPage};
+use super::registry::{word, AccountPreferenceReply, AppFx, PreferenceCmd, BAND};
+
+mod picker;
+pub use picker::{PickerPage, SHAPE as PICKER_SHAPE};
+
+pub const SHAPE: &str = "PreferencesV5{kind:u8,selection:u32,busy:bool,status:str,quality:u8,direct_play:u8,values:[str],marker:{scope:u64,needs_refresh:bool,intro_grant:bool,credits_grant:bool,intro:u8,credits:u8}}";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind { Playback, AudioSubtitles }
+impl PickerKind {
+    fn title(self) -> &'static str { match self {
+        Self::Quality => plx_os::i18n::msg::settings_playback_quality(), Self::DirectPlay => plx_os::i18n::msg::settings_playback_direct_play(),
+        Self::AudioConversion => plx_os::i18n::msg::settings_playback_audio_conversion(),
+        Self::SubtitleSize => plx_os::i18n::msg::settings_playback_subtitle_size(), Self::SubtitlePosition => plx_os::i18n::msg::settings_playback_subtitle_position(),
+        Self::SubtitleColor => plx_os::i18n::msg::settings_playback_subtitle_color(),
+        Self::HdrOverlay => plx_os::i18n::msg::settings_playback_hdr_overlay(),
+        Self::NextEpisode => plx_os::i18n::msg::settings_playback_next_episode(),
+        Self::DeckPress => plx_os::i18n::msg::settings_playback_deck_press(),
+        Self::SkipInterval => plx_os::i18n::msg::settings_playback_skip_interval(),
+        Self::InstantDpadSeeking => plx_os::i18n::msg::settings_playback_instant_dpad_seeking(),
+        Self::UriEngine => plx_os::i18n::msg::settings_playback_uri_engine(),
+        Self::DolbyVision => plx_os::i18n::msg::settings_playback_dolby_vision(),
+        Self::IntroSkip => plx_os::i18n::msg::settings_playback_intro_skip(),
+        Self::CreditsSkip => plx_os::i18n::msg::settings_playback_credits_skip(),
+        Self::UiResolution => plx_os::i18n::msg::settings_resolution_title(),
+        Self::AudioLanguage => plx_os::i18n::msg::settings_audio_language(), Self::SubtitleMode => plx_os::i18n::msg::settings_audio_subtitles(),
+        Self::SubtitleLanguage => plx_os::i18n::msg::settings_audio_subtitle_language(), Self::ForcedSubtitles => plx_os::i18n::msg::settings_audio_forced_subtitles(),
+    }}
+    /// What this field's picker says about it under its title. The four account fields share the
+    /// account note (it is about where those values are saved); each local one has its own.
+    fn copy(self) -> &'static str { match self {
+        Self::Quality => plx_os::i18n::msg::settings_playback_quality_copy(),
+        Self::DirectPlay => plx_os::i18n::msg::settings_playback_direct_play_copy(),
+        Self::AudioConversion => plx_os::i18n::msg::settings_playback_audio_conversion_copy(),
+        Self::SubtitleSize => plx_os::i18n::msg::settings_playback_subtitle_size_copy(),
+        Self::SubtitlePosition => plx_os::i18n::msg::settings_playback_subtitle_position_copy(),
+        Self::SubtitleColor => plx_os::i18n::msg::settings_playback_subtitle_color_copy(),
+        Self::HdrOverlay => plx_os::i18n::msg::settings_playback_hdr_overlay_copy(),
+        Self::NextEpisode => plx_os::i18n::msg::settings_playback_next_episode_copy(),
+        Self::DeckPress => plx_os::i18n::msg::settings_playback_deck_press_copy(),
+        Self::SkipInterval => plx_os::i18n::msg::settings_playback_skip_interval_copy(),
+        Self::InstantDpadSeeking => plx_os::i18n::msg::settings_playback_instant_dpad_seeking_copy(),
+        Self::UriEngine => plx_os::i18n::msg::settings_playback_uri_engine_copy(),
+        Self::DolbyVision => plx_os::i18n::msg::settings_playback_dolby_vision_copy(),
+        Self::IntroSkip => plx_os::i18n::msg::settings_playback_intro_skip_copy(),
+        Self::CreditsSkip => plx_os::i18n::msg::settings_playback_credits_skip_copy(),
+        Self::UiResolution => plx_os::i18n::msg::settings_resolution_detail(),
+        Self::AudioLanguage | Self::SubtitleMode | Self::SubtitleLanguage | Self::ForcedSubtitles => plx_os::i18n::msg::settings_audio_account_note(),
+    }}
+    /// The field-list page this field belongs to; `None` for a field the Settings root lists itself.
+    fn kind(self) -> Option<Kind> {
+        match self {
+            Self::Quality | Self::DirectPlay | Self::AudioConversion | Self::HdrOverlay | Self::NextEpisode | Self::DeckPress | Self::SkipInterval | Self::InstantDpadSeeking | Self::UriEngine | Self::DolbyVision | Self::IntroSkip | Self::CreditsSkip => Some(Kind::Playback),
+            Self::AudioLanguage | Self::SubtitleMode | Self::SubtitleLanguage | Self::ForcedSubtitles | Self::SubtitleSize | Self::SubtitlePosition | Self::SubtitleColor => Some(Kind::AudioSubtitles),
+            Self::UiResolution => None,
+        }
+    }
+    /// Whether this field is a Plex ACCOUNT preference (saved to the account, loaded with it); every
+    /// other field is this app's own, per profile, and never touches the account.
+    fn is_account(self) -> bool {
+        matches!(self, Self::AudioLanguage | Self::SubtitleMode | Self::SubtitleLanguage | Self::ForcedSubtitles)
+    }
+    /// The crumb over this field's picker: the title of the page it was opened from.
+    fn parent_title(self) -> &'static str {
+        self.kind().map_or(plx_os::i18n::msg::settings_title(), Kind::title)
+    }
+}
+impl Kind {
+    fn title(self) -> &'static str {
+        match self {
+            Kind::Playback => plx_os::i18n::msg::settings_playback_title(), Kind::AudioSubtitles => plx_os::i18n::msg::settings_audio_title(),
+        }
+    }
+    fn word(self) -> &'static str {
+        match self { Kind::Playback => word::PLAYBACK, Kind::AudioSubtitles => word::AUDIO }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Value { IntroSkip(MarkerSkipMode, u64), CreditsSkip(MarkerSkipMode, u64), InstantDpadSeeking(InstantDpadSeeking), UriEngine(UriEngine), DolbyVision(DolbyVisionMode), Quality(Quality), DirectPlay(DirectPlayMode), AudioConversion(AudioConversion), SubtitleSize(SubtitleSize), SubtitlePosition(SubtitlePosition), SubtitleTone(SubtitleTone), HdrOverlay(HdrOverlayBrightness), NextEpisode(NextEpisodeMode), DeckPress(DeckPress), SkipInterval(SkipInterval), UiResolution(UiResolution), Language(String), Mode(i64), Forced(i64) }
+
+/// The hashed half of a transaction: what the page shows while a load or save is in flight.
+struct Io { busy: bool, status: String }
+
+/// What the copy under a title explains: a field-list page, or one field's picker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Subject { Page(Kind), Picker(PickerKind) }
+impl Subject {
+    /// Whether Force Direct Play changes what this page is about: the Playback list itself, and the
+    /// two pickers whose outcome it overrides (Quality is pinned to Original, Direct Play is the
+    /// setting). The other four Playback pickers are untouched by it.
+    fn overridden_by_force(self) -> bool {
+        matches!(self, Self::Page(Kind::Playback) | Self::Picker(PickerKind::Quality | PickerKind::DirectPlay))
+    }
+}
+
+/// **Whose settings the Playback page shows.** Its rows are the seated profile's own picks
+/// (`session::Seat`), so the page names that profile; while nobody is seated (a normal session always has one, because
+/// Settings is opened through a profile; `Seat` lists the unseated states, among them a dev-token run and a controlled
+/// replay) the rows show the legacy fallback values and the data layer refuses
+/// a write, so the page shows them read-only instead of offering a pick that cannot land.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Whose { Nobody, Profile(String) }
+impl Whose {
+    /// The seated profile as the profile chip names it (`chrome.rs`): the active profile's title,
+    /// else the roster's owner, else the Account label of a signed-in owner with no name. It reads
+    /// the chip's own session accessors; `account_menu::chip_label` is that rule, but a screen never
+    /// names a sibling. A seat implies a signed-in account, so the chip's signed-out arm (the Sign
+    /// in label) cannot be this page's. Returns the publication generation it read, to notice a change.
+    fn now(inputs: &crate::registry::ScreenInputs) -> (u32, Self) {
+        let profile = &inputs.profile;
+        if profile.seat() == plx_plex::plex::session::Seat::Unseated { return (profile.generation, Self::Nobody); }
+        let account = inputs.session.account(profile.user.as_ref());
+        let name = account.name.unwrap_or_else(|| plx_os::i18n::msg::settings_account_title().to_string());
+        (profile.generation, Self::Profile(name))
+    }
+    /// The rows that are this app's own per-profile picks (every Playback row, and the Look group of
+    /// Audio & subtitles) cannot be changed.
+    /// App-wide settings: with nobody seated (NT-SMB) the rows are the APP's and stay editable.
+    fn read_only(&self) -> bool { false }
+}
+
+/// The copy under the title: the failure / progress status (with the Force note while Forced is
+/// on and matters here), else the subject's own explanation, with the Force note replacing it on
+/// the two pickers Force overrides — a picker explains its own setting, never its page's. The
+/// Playback page's own explanation names the profile whose settings these are (`whose`), or says
+/// to choose one; under Force it keeps a shorter profile sentence, followed by the Force note in
+/// the same paragraph (the text view draws no line break); nobody seated: the rows are
+/// read-only, so only the line.
+fn copy_text<'a>(subject: Subject, status: &'a str, direct_play: DirectPlayMode, whose: &Whose) -> Cow<'a, str> {
+    let forced = direct_play == DirectPlayMode::Forced && subject.overridden_by_force();
+    if !status.is_empty() {
+        return if forced {
+            Cow::Owned(format!("{}\n\n{}", status, plx_os::i18n::msg::settings_playback_force_note()))
+        } else { Cow::Borrowed(status) };
+    }
+    if subject == Subject::Page(Kind::Playback) {
+        // The page's own line wins over the bare Force note: Settings has no other place that names
+        // the profile, and with nobody seated the Force advice cannot be acted on from read-only rows.
+        return match whose {
+            Whose::Nobody => Cow::Borrowed("These settings apply to the whole app, whichever connection you use."),
+            Whose::Profile(name) if forced => Cow::Owned(format!("{} {}", plx_os::i18n::msg::settings_playback_copy_profile_forced(name),
+                plx_os::i18n::msg::settings_playback_force_note())),
+            Whose::Profile(name) => Cow::Owned(plx_os::i18n::msg::settings_playback_copy_profile(name)),
+        };
+    }
+    if forced { return Cow::Borrowed(plx_os::i18n::msg::settings_playback_force_note()); }
+    Cow::Borrowed(match subject {
+        Subject::Page(_) => plx_os::i18n::msg::settings_audio_page_copy(),
+        Subject::Picker(field) => field.copy(),
+    })
+}
+
+enum Pending {
+    Account(Receiver<AccountPreferenceReply>),
+    Local(Receiver<bool>),
+}
+
+thread_local! {
+    /// The last confirmed account snapshot a landed load or save published, with a generation that
+    /// moves on every publish. The field list and its pickers are pages of ONE stack on the UI
+    /// thread; this is how a picker starts from the snapshot its parent confirmed (no second
+    /// load under a sliding page) and how the parent learns what the picker's save confirmed.
+    static CONFIRMED: RefCell<(u64, Option<(PreferenceRequest, PreferenceSnapshot)>)> = const { RefCell::new((0, None)) };
+}
+
+/// A load/save in flight plus the confirmed account snapshot it edits — one implementation for
+/// the field list (initial load, Retry) and the pickers (writes).
+struct Txn {
+    request: Option<PreferenceRequest>,
+    snapshot: Option<PreferenceSnapshot>,
+    pending: Option<Pending>,
+    retry: Option<PreferenceUpdate>,
+    /// The pending receipt answers a WRITE rather than a load.
+    saving: bool,
+    /// The [`CONFIRMED`] generation this transaction has already taken.
+    seen: u64,
+}
+/// What one [`Txn::poll`] found.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Landed { Nothing, Changed, Saved }
+
+impl Txn {
+    fn new(adopt_existing: bool, profile: &plx_plex::plex::session::CurrentProfile) -> Self {
+        let mut txn = Self { request: None, snapshot: None, pending: None, retry: None, saving: false,
+            seen: if adopt_existing { 0 } else { CONFIRMED.with(|c| c.borrow().0) } };
+        txn.adopt_shared(profile);
+        txn
+    }
+    fn prefs(&self) -> Option<&AudioPreferences> { self.snapshot.as_ref().map(|s| &s.preferences) }
+    fn stale(&self, profile: &plx_plex::plex::session::CurrentProfile) -> bool {
+        self.request.as_ref().is_some_and(|r| !r.matches_profile(profile))
+    }
+    /// Publish the confirmed snapshot for the other page of the pair.
+    fn publish(&mut self) {
+        let (Some(request), Some(snapshot)) = (self.request.clone(), self.snapshot.clone()) else { return; };
+        self.seen = CONFIRMED.with(|c| {
+            let mut c = c.borrow_mut();
+            c.0 = c.0.wrapping_add(1);
+            c.1 = Some((request, snapshot));
+            c.0
+        });
+    }
+    /// Take a newer published snapshot, unless a load/save of our own is in flight. True when taken.
+    fn adopt_shared(&mut self, profile: &plx_plex::plex::session::CurrentProfile) -> bool {
+        if self.pending.is_some() { return false; }
+        let taken = CONFIRMED.with(|c| {
+            let c = c.borrow();
+            (c.0 != self.seen).then(|| (c.0, c.1.clone()))
+        });
+        let Some((generation, shared)) = taken else { return false; };
+        self.seen = generation;
+        match shared {
+            Some((request, snapshot)) if request.matches_profile(profile) => {
+                self.request = Some(request); self.snapshot = Some(snapshot); self.retry = None; true
+            }
+            _ => false,
+        }
+    }
+    fn load(&mut self, io: &mut Io, fx: &mut Effects<'_, InnerHost>) {
+        self.request = None;
+        self.retry = None;
+        self.start_account(io, None, fx);
+    }
+    fn start_account(&mut self, io: &mut Io, update: Option<PreferenceUpdate>, fx: &mut Effects<'_, InnerHost>) {
+        if self.pending.is_some() { return; }
+        self.retry = update.clone();
+        let (reply, rx) = mpsc::channel();
+        let command = match (update, self.request.clone(), self.snapshot.clone()) {
+            (Some(update), Some(request), Some(base)) => PreferenceCmd::Save { request, base, update, reply },
+            _ => PreferenceCmd::Load { reply },
+        };
+        self.saving = matches!(&command, PreferenceCmd::Save { .. });
+        // placeholder-exempt: SCOPE decision, not a non-placeholder: this is a real wait caption, left uncounted because the demo storyboard never shows Settings (a driver that does must count it)
+        io.status = if self.saving {
+            plx_os::i18n::msg::settings_audio_saving()
+        } else { plx_os::i18n::msg::settings_audio_loading() }.into();
+        self.pending = Some(Pending::Account(rx)); io.busy = true;
+        fx.push(Fx::App(AppFx::Preferences(command)));
+    }
+    fn save_local(&mut self, io: &mut Io, value: Value, fx: &mut Effects<'_, InnerHost>) {
+        let (reply, rx) = mpsc::channel();
+        let command = match value {
+            Value::IntroSkip(mode, scope) => PreferenceCmd::ChooseMarker { kind: plx_data::metadata::MarkerKind::Intro, mode, scope, reply },
+            Value::CreditsSkip(mode, scope) => PreferenceCmd::ChooseMarker { kind: plx_data::metadata::MarkerKind::Credits, mode, scope, reply },
+            Value::Quality(quality) => PreferenceCmd::Choose(Choice::Quality(quality), reply),
+            Value::DirectPlay(mode) => PreferenceCmd::Choose(Choice::DirectPlay(mode), reply),
+            Value::AudioConversion(place) => PreferenceCmd::Choose(Choice::AudioConversion(place), reply),
+            Value::SubtitleSize(size) => PreferenceCmd::Choose(Choice::SubtitleSize(size), reply),
+            Value::SubtitlePosition(position) => PreferenceCmd::Choose(Choice::SubtitlePosition(position), reply),
+            Value::SubtitleTone(tone) => PreferenceCmd::Choose(Choice::SubtitleTone(tone), reply),
+            Value::HdrOverlay(brightness) => PreferenceCmd::Choose(Choice::HdrOverlayBrightness(brightness), reply),
+            Value::NextEpisode(mode) => PreferenceCmd::Choose(Choice::NextEpisode(mode), reply),
+            Value::DeckPress(mode) => PreferenceCmd::Choose(Choice::DeckPress(mode), reply),
+            Value::InstantDpadSeeking(seeking) => PreferenceCmd::Choose(Choice::InstantDpadSeeking(seeking), reply),
+            Value::UriEngine(engine) => PreferenceCmd::Choose(Choice::UriEngine(engine), reply),
+            Value::DolbyVision(mode) => PreferenceCmd::Choose(Choice::DolbyVision(mode), reply),
+            Value::SkipInterval(interval) => PreferenceCmd::Choose(Choice::SkipInterval(interval), reply),
+            // Install-wide, not a seated profile's live setting, so it has no `Choice`.
+            Value::UiResolution(mode) => PreferenceCmd::UiResolution { mode, reply },
+            _ => return,
+        };
+        self.pending = Some(Pending::Local(rx)); io.busy = true; self.saving = true;
+        io.status = plx_os::i18n::msg::settings_playback_saving().into();
+        fx.push(Fx::App(AppFx::Preferences(command)));
+    }
+    /// The request no longer names the active profile: drop the snapshot and any in-flight
+    /// receipt and load again.
+    fn recover_stale(&mut self, io: &mut Io, fx: &mut Effects<'_, InnerHost>) {
+        self.snapshot = None; self.pending = None; io.busy = false;
+        self.load(io, fx);
+    }
+    fn poll(&mut self, io: &mut Io, fx: &mut Effects<'_, InnerHost>, profile: &plx_plex::plex::session::CurrentProfile) -> Landed {
+        enum Receipt { Account(AccountPreferenceReply), Local(bool), Failed }
+        let receipt = match &self.pending {
+            Some(Pending::Account(rx)) => match rx.try_recv() {
+                Ok(result) => Some(Receipt::Account(result)),
+                Err(mpsc::TryRecvError::Disconnected) => Some(Receipt::Failed), _ => None,
+            },
+            Some(Pending::Local(ticket)) => match ticket.try_recv() {
+                Ok(result) => Some(Receipt::Local(result)),
+                Err(mpsc::TryRecvError::Disconnected) => Some(Receipt::Failed), _ => None,
+            },
+            None => None,
+        };
+        let Some(receipt) = receipt else { return Landed::Nothing; };
+        self.pending = None; io.busy = false;
+        let was_write = std::mem::take(&mut self.saving);
+        let mut landed = Landed::Changed;
+        match receipt {
+            Receipt::Account(reply) => {
+                if reply.request.as_ref().is_some_and(|request| !request.matches_profile(profile)) {
+                    self.snapshot = None; self.load(io, fx);
+                } else if let Some(request) = reply.request {
+                    self.request = Some(request);
+                    match reply.outcome {
+                        Ok(snapshot) => {
+                            self.snapshot = Some(snapshot); self.retry = None; io.status.clear();
+                            self.publish();
+                            if was_write { landed = Landed::Saved; }
+                        }
+                        Err(error) => {
+                            if error == PreferenceError::Stale { self.retry = None; }
+                            io.status = plx_os::i18n::msg::settings_audio_error_retry(error.message());
+                        }
+                    }
+                } else {
+                    self.request = None; self.snapshot = None; self.retry = None;
+                    io.status = plx_os::i18n::msg::settings_audio_sign_in_again().into();
+                }
+            }
+            Receipt::Local(true) => { io.status.clear(); if was_write { landed = Landed::Saved; } }
+            Receipt::Local(false) | Receipt::Failed => io.status = plx_os::i18n::msg::settings_playback_save_failed().into(),
+        }
+        landed
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowId { Field(PickerKind), PlayerHud, Retry }
+impl FormId for RowId {
+    /// Hand-assigned, per page: each field's position in ITS page's list (what its table index was
+    /// before the page moved onto a form, so a recorded focus on a field row is unchanged), Retry
+    /// after them. Keys only need to be unique within one page.
+    fn key(&self) -> RowKey {
+        RowKey(match self {
+            Self::Field(PickerKind::Quality | PickerKind::AudioLanguage) => 0,
+            Self::Field(PickerKind::DirectPlay | PickerKind::SubtitleMode) => 1,
+            Self::Field(PickerKind::SubtitleLanguage) => 2,
+            Self::Field(PickerKind::ForcedSubtitles) => 3,
+            // Moved from the Playback list to the Audio & subtitles page, whose own keys 0-3 they
+            // must not meet.
+            Self::Field(PickerKind::SubtitleSize) => 15,
+            Self::Field(PickerKind::SubtitlePosition) => 16,
+            Self::Field(PickerKind::SubtitleColor) => 18,
+            Self::Field(PickerKind::NextEpisode) => 4,
+            Self::Field(PickerKind::SkipInterval) => 5,
+            Self::Field(PickerKind::DeckPress) => 7,
+            Self::Field(PickerKind::HdrOverlay) => 8,
+            // Listed on the Settings root, never on a field list; the number only keeps the match total.
+            Self::Field(PickerKind::UiResolution) => 9,
+            Self::Field(PickerKind::InstantDpadSeeking) => 10,
+            Self::Field(PickerKind::DolbyVision) => 11,
+            Self::Field(PickerKind::UriEngine) => 17,
+            Self::PlayerHud => 12,
+            Self::Field(PickerKind::IntroSkip) => 13,
+            Self::Field(PickerKind::CreditsSkip) => 14,
+            Self::Field(PickerKind::AudioConversion) => 15,
+            Self::Retry => 6,
+        })
+    }
+    fn a11y(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Field(PickerKind::Quality) => "quality",
+            Self::Field(PickerKind::DirectPlay) => "direct_play",
+            Self::Field(PickerKind::AudioConversion) => "audio_conversion",
+            Self::Field(PickerKind::SubtitleSize) => "subtitle_size",
+            Self::Field(PickerKind::SubtitlePosition) => "subtitle_position",
+            Self::Field(PickerKind::SubtitleColor) => "subtitle_color",
+            Self::Field(PickerKind::HdrOverlay) => "hdr_overlay",
+            Self::Field(PickerKind::NextEpisode) => "next_episode",
+            Self::Field(PickerKind::SkipInterval) => "skip_interval",
+            Self::Field(PickerKind::DeckPress) => "deck_press",
+            Self::Field(PickerKind::AudioLanguage) => "audio_language",
+            Self::Field(PickerKind::SubtitleMode) => "subtitle_mode",
+            Self::Field(PickerKind::SubtitleLanguage) => "subtitle_language",
+            Self::Field(PickerKind::ForcedSubtitles) => "forced_subtitles",
+            Self::Field(PickerKind::UiResolution) => "ui_resolution",
+            Self::Field(PickerKind::InstantDpadSeeking) => "instant_dpad_seeking",
+            Self::Field(PickerKind::UriEngine) => "uri_engine",
+            Self::Field(PickerKind::DolbyVision) => "dolby_vision",
+            Self::Field(PickerKind::IntroSkip) => "intro_skip",
+            Self::Field(PickerKind::CreditsSkip) => "credits_skip",
+            Self::PlayerHud => "player_hud",
+            Self::Retry => "retry",
+        })
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action { Open, Retry }
+
+struct State {
+    marker_prefs: MarkerPrefsView,
+    kind: Kind, selected: u32, io: Io,
+    quality: Quality, direct_play: DirectPlayMode, values: Vec<String>,
+}
+impl LogicalState for State {
+    fn write(&self, c: &mut Canon) {
+        c.u8(self.kind as u8).u32(self.selected).bool(self.io.busy).str(&self.io.status)
+            .u8(self.quality as u8).u8(self.direct_play as u8).u32(self.values.len() as u32);
+        for v in &self.values { c.str(v); }
+        write_marker_prefs(c, self.marker_prefs);
+    }
+    fn probe(&self, out: &mut String) {
+        out.push_str(&format!("preferences {:?} sel={} busy={}", self.kind, self.selected, self.io.busy));
+    }
+}
+
+pub struct PreferencesPage {
+    inputs: crate::registry::ScreenInputs,
+    marker_prefs: MarkerPrefsView,
+    entry: EntryId,
+    form: FormTable<RowId, Action, SettingsPage>,
+    state: State,
+    /// The page's own sentence: the status while one is showing, else what the page is about. The
+    /// sentence under the title is the focused row's ([`row_sentence`]) and falls back to this.
+    copy: String,
+    /// The sentence beside the table, which fades to the focused row's.
+    follow: plx_ui::follow_copy::FollowCopy,
+    txn: Txn,
+    /// The caption Size/Position the rows were last built from. Not canonical state: it only
+    /// notices a pick made elsewhere (the player's Style pages, or this page's picker, which
+    /// publish the live value before their write lands) so the cached read-outs are rebuilt.
+    look: (SubtitleSize, SubtitlePosition, SubtitleTone, HdrOverlayBrightness),
+    /// The next-episode mode, deck press and skip interval the rows were last built from (not
+    /// canonical state, like `look`).
+    next_episode: NextEpisodeMode,
+    audio_conversion: AudioConversion,
+    deck_press: DeckPress,
+    skip_interval: SkipInterval,
+    instant_dpad_seeking: InstantDpadSeeking,
+    uri_engine: UriEngine,
+    dolby_vision: DolbyVisionMode,
+    /// Whose settings the list was last built for, with the profile publication it read that from
+    /// (not canonical state, like `look`: the copy and the rows' dimming are not hashed either).
+    whose: (u32, Whose),
+}
+impl PreferencesPage {
+    pub fn new(entry: EntryId, kind: Kind, inputs: &crate::registry::ScreenInputs) -> Self {
+        let mut s = Self { inputs: inputs.clone(), marker_prefs: Default::default(), entry, form: FormTable::page(BAND),
+            state: State { marker_prefs: Default::default(), kind, selected: 0, io: Io { busy: false, status: String::new() },
+                quality: inputs.preference::<QualityPref>(), direct_play: inputs.preference::<DirectPlayModePref>(), values: Vec::new() },
+            copy: String::new(), follow: plx_ui::follow_copy::FollowCopy::new(""), txn: Txn::new(false, &inputs.profile),
+            look: preference_look(inputs),
+            next_episode: inputs.preference::<NextEpisodeModePref>(), audio_conversion: inputs.preference::<AudioConversionPref>(), deck_press: inputs.preference::<DeckPressPref>(),
+            skip_interval: inputs.preference::<SkipIntervalPref>(), instant_dpad_seeking: inputs.preference::<InstantDpadSeekingPref>(),
+            uri_engine: inputs.preference::<UriEnginePref>(),
+            dolby_vision: inputs.preference::<DolbyVisionModePref>(), whose: Whose::now(inputs) };
+        s.rebuild(None);
+        // A page opens on its first row's sentence at once, with nothing fading.
+        s.follow = plx_ui::follow_copy::FollowCopy::new(&s.sentence());
+        s
+    }
+    fn view(&self) -> TableScreen<'_> {
+        TableScreen::new(Header::new(RouteLayout::screen(), Some(plx_os::i18n::msg::settings_title()),
+            self.state.kind.title(), &self.copy).with_follow(&self.follow), &self.form.table, GroupId(0), self.entry).keyed(&self.form)
+    }
+    /// The sentence the focused row states beside the table ([`row_sentence`]).
+    fn sentence(&self) -> Cow<'_, str> {
+        row_sentence(self.state.kind, self.form.selected_id(), &self.copy, !self.state.io.status.is_empty(), self.state.direct_play, &self.whose.1)
+    }
+    fn focus(&self, fx: &mut Effects<'_, InnerHost>) {
+        let key = self.form.key_at(self.form.table.sel.max(0) as usize).map_or(0, |k| k.0);
+        fx.push(Fx::Deliver(MachineId::Instance(InstanceId(0)),
+            Delivery::Screen(ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::Elem(FocusKey { entry: self.entry, elem: key }) }))));
+    }
+    fn start_initial_load(&mut self, fx: &mut Effects<'_, InnerHost>) -> bool {
+        // NT-SMB: there is no account to load audio/subtitle languages from; the page is local.
+        let _ = fx;
+        false
+    }
+    /// Rebuild the field list from the confirmed values, keeping the row the cursor is on by identity.
+    fn rebuild(&mut self, keep: Option<RowId>) {
+        self.state.marker_prefs = self.marker_prefs;
+        self.state.quality = self.inputs.preference::<QualityPref>();
+        self.state.direct_play = self.inputs.preference::<DirectPlayModePref>();
+        self.look = preference_look(&self.inputs);
+        self.next_episode = self.inputs.preference::<NextEpisodeModePref>();
+        self.audio_conversion = self.inputs.preference::<AudioConversionPref>();
+        self.deck_press = self.inputs.preference::<DeckPressPref>();
+        self.skip_interval = self.inputs.preference::<SkipIntervalPref>();
+        self.instant_dpad_seeking = self.inputs.preference::<InstantDpadSeekingPref>();
+        self.uri_engine = self.inputs.preference::<UriEnginePref>();
+        self.dolby_vision = self.inputs.preference::<DolbyVisionModePref>();
+        self.whose = Whose::now(&self.inputs);
+        self.copy = copy_text(Subject::Page(self.state.kind), &self.state.io.status, self.state.direct_play, &self.whose.1).into_owned();
+        let inputs = FieldListInputs {
+            kind: self.state.kind, quality: self.state.quality, direct_play: self.state.direct_play, local: &self.inputs,
+            prefs: self.txn.prefs(), busy: self.state.io.busy, show_retry: !self.state.io.status.is_empty(),
+            read_only: self.whose.1.read_only(), marker_prefs: self.marker_prefs,
+        };
+        self.state.values = fields_of(&inputs).iter()
+            .map(|&f| field_readout_with_marker(f, inputs.quality, inputs.direct_play, inputs.prefs, inputs.marker_prefs, inputs.local)).collect();
+        self.form.table.list_focused = true;
+        self.form.set(field_form(&inputs), keep.as_ref());
+        self.state.selected = self.form.key_at(self.form.table.sel.max(0) as usize).map_or(0, |k| k.0);
+        let sentence = self.sentence().into_owned();
+        self.follow.follow(&sentence);
+    }
+    fn rebuild_keeping(&mut self) {
+        let keep = self.form.selected_id().copied();
+        self.rebuild(keep);
+    }
+    fn activate(&mut self, key: u32, fx: &mut Effects<'_, InnerHost>) {
+        match form_activate(&self.form, key, fx) {
+            Some(Action::Retry) => {
+                if let Some(update) = self.txn.retry.clone() { self.txn.start_account(&mut self.state.io, Some(update), fx); }
+                else { self.txn.load(&mut self.state.io, fx); }
+                self.rebuild_keeping();
+                fx.invalidate(plx_machine::present::Provenance::Input);
+            }
+            Some(Action::Open) | None => {}
+        }
+    }
+}
+
+/// **The groups of a field-list page** (Settings v2), in the order the page draws them: each is its
+/// header and the fields it can show. Video & playback is Video, Player and Up next; Audio &
+/// subtitles is Audio and Subtitles (both from the Plex account) and Look (this app's own).
+fn groups_of(kind: Kind) -> [(&'static str, &'static [PickerKind]); 3] {
+    use plx_os::i18n::msg;
+    match kind {
+        // NT-SMB: only what the PLAYER does on this TV. Server-side choices (quality ladder, direct
+        // play, audio conversion), skip markers, Up next and Continue Watching are not offered, and
+        // neither is the Player HUD page.
+        Kind::Playback => [
+            (msg::settings_playback_group_video(), &[PickerKind::DolbyVision, PickerKind::UriEngine]),
+            (msg::settings_playback_group_player(), &[PickerKind::SkipInterval, PickerKind::InstantDpadSeeking, PickerKind::HdrOverlay]),
+            ("", &[]),
+        ],
+        // The account's audio/subtitle language rows live on a media server; only the subtitle
+        // look is this app's own.
+        Kind::AudioSubtitles => [
+            ("", &[]),
+            ("", &[]),
+            (msg::settings_audio_group_look(), &[PickerKind::SubtitleSize, PickerKind::SubtitlePosition, PickerKind::SubtitleColor]),
+        ],
+    }
+}
+
+/// Whether the page lists `field` now: a marker skip only when the marker prefs are granted, an
+/// account field (Audio & subtitles' first two groups) only once a snapshot has loaded, and the
+/// Look rows (this app's own, so they never wait for the account) once the page has settled, with
+/// its rows or its Retry (a failed load): a page still loading lists nothing, so the first landing
+/// seats its top row.
+fn shown(field: PickerKind, inputs: &FieldListInputs<'_>) -> bool {
+    match field {
+        PickerKind::SubtitleSize | PickerKind::SubtitlePosition | PickerKind::SubtitleColor => true,
+        PickerKind::IntroSkip => inputs.marker_prefs.intro_granted,
+        PickerKind::CreditsSkip => inputs.marker_prefs.credits_granted,
+        PickerKind::AudioLanguage | PickerKind::SubtitleMode | PickerKind::SubtitleLanguage | PickerKind::ForcedSubtitles => inputs.prefs.is_some(),
+        _ => true,
+    }
+}
+
+/// Which fields `kind`'s list shows, in page order.
+fn fields_of(inputs: &FieldListInputs<'_>) -> Vec<PickerKind> {
+    groups_of(inputs.kind).into_iter().flat_map(|(_, fields)| fields.iter().copied()).filter(|f| shown(*f, inputs)).collect()
+}
+
+/// **The sentence a field-list row states beside the table** (Settings v2). Pure: a function of the
+/// focused row, the page's own sentence and the facts that change what a row means.
+///
+/// * a status (loading, a failed save) is the page's, which holds it, whatever row has focus;
+/// * the rows this app owns per profile say, with nobody seated, that a profile has to be chosen
+///   (Playback's page sentence says so itself);
+/// * a Playback row, and the Look group, state their own explanation (the one their picker opens
+///   on); Default quality, overridden by Force Direct Play, says so first;
+/// * the account rows (Audio, Subtitles), the Retry button and the Player HUD row have none of their
+///   own: the page's sentence.
+fn row_sentence<'a>(kind: Kind, id: Option<&RowId>, page: &'a str, status: bool, direct_play: DirectPlayMode, whose: &Whose) -> Cow<'a, str> {
+    use plx_os::i18n::msg;
+    let Some(RowId::Field(field)) = id else { return Cow::Borrowed(page) };
+    if field.is_account() || status { return Cow::Borrowed(page); }
+    let _ = (kind, whose); // app-wide with nobody seated: the row explains itself
+    if *field == PickerKind::Quality && direct_play == DirectPlayMode::Forced {
+        return Cow::Owned(format!("{} {}", msg::settings_playback_overridden(), field.copy()));
+    }
+    Cow::Borrowed(field.copy())
+}
+
+fn preference_look(inputs: &crate::registry::ScreenInputs) -> (SubtitleSize, SubtitlePosition, SubtitleTone, HdrOverlayBrightness) {
+    (inputs.preference::<SubtitleSizePref>(), inputs.preference::<SubtitlePositionPref>(), inputs.preference::<SubtitleTonePref>(), inputs.preference::<HdrOverlayBrightnessPref>())
+}
+
+/// `PickerKind`'s current [`Value`] from the two locally-saved settings plus the account preferences, if
+/// loaded. Free rather than a page method so [`field_section`] needs no page and no globals.
+fn resolve_value(field: PickerKind, quality: Quality, direct_play: DirectPlayMode, prefs: Option<&AudioPreferences>, local: &crate::registry::ScreenInputs) -> Value {
+    match field {
+        PickerKind::IntroSkip | PickerKind::CreditsSkip => unreachable!("marker fields require the frame publication"),
+        PickerKind::Quality => Value::Quality(quality),
+        PickerKind::DirectPlay => Value::DirectPlay(direct_play),
+        PickerKind::AudioConversion => Value::AudioConversion(local.preference::<AudioConversionPref>()),
+        PickerKind::SubtitleSize => Value::SubtitleSize(local.preference::<SubtitleSizePref>()),
+        PickerKind::SubtitlePosition => Value::SubtitlePosition(local.preference::<SubtitlePositionPref>()),
+        PickerKind::SubtitleColor => Value::SubtitleTone(local.preference::<SubtitleTonePref>()),
+        PickerKind::HdrOverlay => Value::HdrOverlay(local.preference::<HdrOverlayBrightnessPref>()),
+        PickerKind::NextEpisode => Value::NextEpisode(local.preference::<NextEpisodeModePref>()),
+        PickerKind::DeckPress => Value::DeckPress(local.preference::<DeckPressPref>()),
+        PickerKind::SkipInterval => Value::SkipInterval(local.preference::<SkipIntervalPref>()),
+        PickerKind::InstantDpadSeeking => Value::InstantDpadSeeking(local.preference::<InstantDpadSeekingPref>()),
+        PickerKind::UriEngine => Value::UriEngine(local.preference::<UriEnginePref>()),
+        PickerKind::DolbyVision => Value::DolbyVision(local.preference::<DolbyVisionModePref>()),
+        PickerKind::UiResolution => unreachable!("resolution requires the retained inputs"),
+        // A deprecated code (`pb`) resolves to its replacement so the picker checks that entry.
+        PickerKind::AudioLanguage => Value::Language(prefs.and_then(|p| p.stated_language.as_deref()).map(plx_plex::plex::languages::canonical).unwrap_or_default().to_string()),
+        PickerKind::SubtitleLanguage => Value::Language(prefs.and_then(|p| p.subtitle_language.as_deref()).map(plx_plex::plex::languages::canonical).unwrap_or_default().to_string()),
+        PickerKind::SubtitleMode => Value::Mode(prefs.map_or(0, |p| p.subtitle_mode)),
+        PickerKind::ForcedSubtitles => Value::Forced(prefs.map_or(0, |p| p.subtitle_forced)),
+    }
+}
+/// `PickerKind`'s picker options.
+fn field_options(field: PickerKind, _quality: Quality, _direct_play: DirectPlayMode, prefs: Option<&AudioPreferences>) -> Vec<(String, Value)> {
+    match field {
+        PickerKind::IntroSkip | PickerKind::CreditsSkip => unreachable!("marker options require a frame publication"),
+        PickerKind::Quality => plx_media::route::available_quality_ladder().iter()
+            .map(|q| (q.label().into(), Value::Quality(*q))).collect(),
+        PickerKind::DirectPlay => [DirectPlayMode::Auto, DirectPlayMode::Forced, DirectPlayMode::Disabled]
+            .into_iter().map(|m| (mode_label(m).into(), Value::DirectPlay(m))).collect(),
+        PickerKind::AudioConversion => AudioConversion::LADDER.into_iter()
+            .map(|c| (audio_conversion_label(c).into(), Value::AudioConversion(c))).collect(),
+        PickerKind::SubtitleSize => SubtitleSize::LADDER.into_iter()
+            .map(|s| (subtitle_size_label(s).into(), Value::SubtitleSize(s))).collect(),
+        PickerKind::SubtitlePosition => SubtitlePosition::LADDER.into_iter()
+            .map(|p| (subtitle_position_label(p).into(), Value::SubtitlePosition(p))).collect(),
+        PickerKind::SubtitleColor => SubtitleTone::LADDER.into_iter()
+            .map(|t| (subtitle_tone_label(t).into(), Value::SubtitleTone(t))).collect(),
+        PickerKind::HdrOverlay => HdrOverlayBrightness::LADDER.into_iter()
+            .map(|b| (hdr_overlay_label(b).into(), Value::HdrOverlay(b))).collect(),
+        PickerKind::NextEpisode => NextEpisodeMode::LADDER.into_iter()
+            .map(|m| (next_episode_label(m).into(), Value::NextEpisode(m))).collect(),
+        PickerKind::DeckPress => DeckPress::LADDER.into_iter()
+            .map(|m| (deck_press_label(m).into(), Value::DeckPress(m))).collect(),
+        PickerKind::InstantDpadSeeking => InstantDpadSeeking::LADDER.into_iter()
+            .map(|m| (instant_dpad_seeking_label(m).into(), Value::InstantDpadSeeking(m))).collect(),
+        PickerKind::UriEngine => UriEngine::LADDER.into_iter()
+            .map(|m| (uri_engine_label(m).into(), Value::UriEngine(m))).collect(),
+        PickerKind::DolbyVision => DolbyVisionMode::LADDER.into_iter()
+            .map(|m| (dolby_vision_label(m).into(), Value::DolbyVision(m))).collect(),
+        PickerKind::SkipInterval => SkipInterval::LADDER.into_iter()
+            .map(|i| (skip_interval_label(i), Value::SkipInterval(i))).collect(),
+        PickerKind::UiResolution => UiResolution::LADDER.into_iter()
+            .map(|m| (resolution_label(m), Value::UiResolution(m))).collect(),
+        PickerKind::SubtitleMode => [(plx_os::i18n::msg::settings_audio_manual(), 0), (plx_os::i18n::msg::settings_audio_foreign(), 1), (plx_os::i18n::msg::settings_audio_always(), 2)]
+            .into_iter().map(|(label, mode)| (label.into(), Value::Mode(mode))).collect(),
+        PickerKind::ForcedSubtitles => [plx_os::i18n::msg::settings_audio_prefer_regular(), plx_os::i18n::msg::settings_audio_prefer_forced(), plx_os::i18n::msg::settings_audio_only_forced(), plx_os::i18n::msg::settings_audio_only_regular()]
+            .into_iter().enumerate().map(|(i, s)| (s.into(), Value::Forced(i as i64))).collect(),
+        PickerKind::AudioLanguage | PickerKind::SubtitleLanguage => {
+            let mut result = vec![(if field == PickerKind::AudioLanguage { plx_os::i18n::msg::settings_audio_original() } else { plx_os::i18n::msg::settings_audio_no_preference() }.into(), Value::Language(String::new()))];
+            result.extend(plx_plex::plex::languages::picker()
+                .map(|l| (l.name.to_string(), Value::Language(l.code.to_string()))));
+            let current = Value::Language(prefs.and_then(|p| if field == PickerKind::AudioLanguage { p.stated_language.as_deref() } else { p.subtitle_language.as_deref() }).map(plx_plex::plex::languages::canonical).unwrap_or_default().to_string());
+            if !result.iter().any(|(_, v)| *v == current) {
+                if let Value::Language(code) = current { result.push((code.clone(), Value::Language(code))); }
+            }
+            result
+        }
+    }
+}
+/// The trailing read-out `PickerKind`'s row shows for its current value. Direct Play and Forced
+/// Subtitles show a short form of the picker's label ([`direct_play_readout`], [`forced_readout`]),
+/// as does the Subtitles mode row's foreign-audio option; every other field shows the picker's own
+/// label.
+fn field_readout(field: PickerKind, quality: Quality, direct_play: DirectPlayMode, prefs: Option<&AudioPreferences>, local: &crate::registry::ScreenInputs) -> String {
+    match field {
+        PickerKind::DirectPlay => direct_play_readout(direct_play).into(),
+        // Force Direct Play plays the original file whatever this says (the row's sentence tells it).
+        PickerKind::Quality if direct_play == DirectPlayMode::Forced => plx_os::i18n::msg::settings_playback_overridden_value().into(),
+        PickerKind::ForcedSubtitles => forced_readout(prefs.map_or(0, |p| p.subtitle_forced)).into(),
+        // Only the foreign-audio mode has a short form (es does not fit beside the label); the
+        // other two modes show the picker's own label.
+        PickerKind::SubtitleMode if prefs.is_some_and(|p| p.subtitle_mode == 1) => plx_os::i18n::msg::settings_audio_foreign_short().into(),
+        PickerKind::SubtitleSize => subtitle_size_label(local.preference::<SubtitleSizePref>()).into(),
+        PickerKind::SubtitlePosition => subtitle_position_label(local.preference::<SubtitlePositionPref>()).into(),
+        PickerKind::SubtitleColor => subtitle_tone_label(local.preference::<SubtitleTonePref>()).into(),
+        PickerKind::HdrOverlay => hdr_overlay_label(local.preference::<HdrOverlayBrightnessPref>()).into(),
+        _ => {
+            let current = resolve_value(field, quality, direct_play, prefs, local);
+            field_options(field, quality, direct_play, prefs).into_iter().find(|(_, v)| *v == current)
+                .map_or_else(|| plx_os::i18n::msg::settings_audio_not_set().into(), |(s, _)| s)
+        }
+    }
+}
+
+/// The inputs [`field_form`] builds a `Kind`'s field list from, so the builder reads no global.
+struct FieldListInputs<'a> {
+    local: &'a crate::registry::ScreenInputs,
+    kind: Kind,
+    quality: Quality,
+    direct_play: DirectPlayMode,
+    /// The signed-in account's audio/subtitle preferences, once a snapshot has loaded.
+    prefs: Option<&'a AudioPreferences>,
+    busy: bool,
+    /// Show the Retry row: the account kind has a non-empty status message and nothing is in flight.
+    show_retry: bool,
+    /// The field rows are shown but cannot be opened: no profile is seated to own a pick.
+    read_only: bool,
+    marker_prefs: MarkerPrefsView,
+}
+/// The page's field list as a [`Form`]: each field a `Nav` item onto its picker page, plus the
+/// Audio & Subtitles Retry button, built from [`FieldListInputs`] alone.
+fn field_form(inputs: &FieldListInputs<'_>) -> Form<RowId, Action, SettingsPage> {
+    use plx_os::i18n::msg;
+    let mut form = Form::new();
+    for (index, (header, fields)) in groups_of(inputs.kind).into_iter().enumerate() {
+        // The Audio & subtitles Retry button belongs to the account groups (the first two), so it
+        // stands after them, ahead of Look.
+        let mut section = FormSection::new(header).visible(fields.iter().any(|f| shown(*f, inputs)));
+        for &field in fields.iter().filter(|f| shown(**f, inputs)) {
+            let value = field_readout_with_marker(field, inputs.quality, inputs.direct_play, inputs.prefs, inputs.marker_prefs, inputs.local);
+            let mut row = Row::new(field.title()).value(&value).chevron(true);
+            // A status the table states itself: it has to stay visible beside the row.
+            if field == PickerKind::AudioLanguage && inputs.prefs.is_some_and(|p| p.auto_select_audio == Some(false)) {
+                row = row.detail(msg::settings_audio_selection_off());
+            }
+            let account = field.is_account();
+            section = section.item(RowId::Field(field), RowKind::Nav(SettingsPage::Picker(field)), Action::Open, row)
+                .disabled(inputs.read_only && !account);
+        }
+        form = form.section(section);
+    }
+    form
+}
+fn mode_label(mode: DirectPlayMode) -> &'static str {
+    match mode { DirectPlayMode::Auto => plx_os::i18n::msg::settings_playback_auto(), DirectPlayMode::Forced => plx_os::i18n::msg::settings_playback_forced(), DirectPlayMode::Disabled => plx_os::i18n::msg::settings_playback_disabled() }
+}
+use plx_appkit::track_menu::{subtitle_position_label, subtitle_size_label, subtitle_tone_label};
+fn audio_conversion_label(place: AudioConversion) -> &'static str {
+    match place {
+        AudioConversion::Server => plx_os::i18n::msg::settings_playback_audio_conversion_server(),
+        AudioConversion::Tv => plx_os::i18n::msg::settings_playback_audio_conversion_tv(),
+    }
+}
+fn hdr_overlay_label(brightness: HdrOverlayBrightness) -> &'static str {
+    match brightness {
+        HdrOverlayBrightness::Full => plx_os::i18n::msg::settings_playback_hdr_overlay_full(),
+        HdrOverlayBrightness::ThreeQuarters => plx_os::i18n::msg::settings_playback_hdr_overlay_three_quarters(),
+        HdrOverlayBrightness::Half => plx_os::i18n::msg::settings_playback_hdr_overlay_half(),
+    }
+}
+fn next_episode_label(mode: NextEpisodeMode) -> &'static str {
+    match mode {
+        NextEpisodeMode::Countdown => plx_os::i18n::msg::settings_playback_next_episode_countdown(),
+        NextEpisodeMode::AfterCredits => plx_os::i18n::msg::settings_playback_next_episode_after_credits(),
+        NextEpisodeMode::Off => plx_os::i18n::msg::settings_playback_next_episode_off(),
+    }
+}
+fn deck_press_label(mode: DeckPress) -> &'static str {
+    match mode {
+        DeckPress::Details => plx_os::i18n::msg::settings_playback_deck_press_details(),
+        DeckPress::Play => plx_os::i18n::msg::settings_playback_deck_press_play(),
+    }
+}
+fn uri_engine_label(engine: UriEngine) -> &'static str {
+    match engine {
+        UriEngine::Off => plx_os::i18n::msg::settings_playback_uri_engine_off(),
+        UriEngine::On => plx_os::i18n::msg::settings_playback_uri_engine_on(),
+    }
+}
+fn instant_dpad_seeking_label(mode: InstantDpadSeeking) -> &'static str {
+    match mode {
+        InstantDpadSeeking::Off => plx_os::i18n::msg::settings_playback_instant_dpad_seeking_off(),
+        InstantDpadSeeking::On => plx_os::i18n::msg::settings_playback_instant_dpad_seeking_on(),
+    }
+}
+fn dolby_vision_label(mode: DolbyVisionMode) -> &'static str {
+    match mode {
+        DolbyVisionMode::Auto => plx_os::i18n::msg::settings_playback_auto(),
+        DolbyVisionMode::Off => plx_os::i18n::msg::settings_playback_dolby_vision_off(),
+    }
+}
+/// What the Interface resolution reads, on the Settings root and in its picker. The sizes are
+/// numbers, not words, so only Automatic (the native 1920x1080 canvas on every set) is translated.
+pub(crate) fn resolution_label(mode: UiResolution) -> String {
+    match mode.size() {
+        None => plx_os::i18n::msg::settings_resolution_auto().to_string(),
+        Some((w, h)) => format!("{w}x{h}"),
+    }
+}
+fn skip_interval_label(interval: SkipInterval) -> String {
+    plx_os::i18n::msg::settings_playback_skip_interval_seconds(interval.seconds())
+}
+/// The Direct Play row's trailing read-out. `mode_label`'s Forced string is long enough to squeeze
+/// the row's label, so Forced alone takes the short form; the picker lists the full strings.
+fn direct_play_readout(mode: DirectPlayMode) -> &'static str {
+    match mode {
+        DirectPlayMode::Forced => plx_os::i18n::msg::settings_playback_forced_short(),
+        _ => mode_label(mode),
+    }
+}
+/// The Forced Subtitles row's trailing read-out, per option in `field_options` order: a short form
+/// of the picker's sentence. An unknown value reads as "Not set".
+fn forced_readout(value: i64) -> &'static str {
+    match value {
+        0 => plx_os::i18n::msg::settings_audio_prefer_regular_short(),
+        1 => plx_os::i18n::msg::settings_audio_prefer_forced_short(),
+        2 => plx_os::i18n::msg::settings_audio_only_forced_short(),
+        3 => plx_os::i18n::msg::settings_audio_only_regular_short(),
+        _ => plx_os::i18n::msg::settings_audio_not_set(),
+    }
+}
+impl Machine<InnerHost> for PreferencesPage {
+    type Ev = ScreenEvent<InnerHost>;
+    fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, InnerHost>, fx: &mut Effects<'_, InnerHost>) -> Handled {
+        let inputs_changed = self.inputs.session_key() != cx.views.inputs.session_key()
+            || !std::sync::Arc::ptr_eq(&self.inputs.session, &cx.views.inputs.session)
+            || !std::sync::Arc::ptr_eq(&self.inputs.profile, &cx.views.inputs.profile)
+            || !self.inputs.same_facts(cx.views.inputs);
+        self.inputs = cx.views.inputs.clone();
+        if inputs_changed {
+            self.rebuild_keeping();
+            fx.invalidate(plx_machine::present::Provenance::Landing(MachineId::Session));
+        }
+        let marker_prefs = cx.views.marker_prefs;
+        if marker_prefs != self.marker_prefs {
+            self.marker_prefs = marker_prefs;
+            self.rebuild_keeping();
+            fx.invalidate(plx_machine::present::Provenance::Input);
+        }
+        if matches!(ev, ScreenEvent::Tick(_)) && self.state.kind == Kind::Playback && marker_prefs.needs_refresh {
+            fx.push(Fx::App(AppFx::Preferences(PreferenceCmd::EnsureMarkerAccess)));
+        }
+        match ev {
+            ScreenEvent::Enter(_) => {
+                // A return from a picker: its save may have confirmed a new snapshot.
+                let adopted = self.txn.adopt_shared(&self.inputs.profile);
+                if self.start_initial_load(fx) || adopted {
+                    self.rebuild_keeping(); fx.invalidate(plx_machine::present::Provenance::Input);
+                }
+                Handled::No
+            }
+            ScreenEvent::Tick(t) => {
+                let started = self.start_initial_load(fx);
+                let stale = self.txn.stale(&self.inputs.profile);
+                if stale { self.txn.recover_stale(&mut self.state.io, fx); }
+                let adopted = self.txn.adopt_shared(&self.inputs.profile);
+                let had_rows = self.form.table.n_rows() > 0;
+                let landed = self.txn.poll(&mut self.state.io, fx, &self.inputs.profile) != Landed::Nothing;
+                if landed || stale || started || adopted || self.state.quality != self.inputs.preference::<QualityPref>()
+                    || self.state.direct_play != self.inputs.preference::<DirectPlayModePref>()
+                    || self.look != preference_look(&self.inputs)
+                    || self.next_episode != self.inputs.preference::<NextEpisodeModePref>()
+                    || self.audio_conversion != self.inputs.preference::<AudioConversionPref>()
+                    || self.deck_press != self.inputs.preference::<DeckPressPref>()
+                    || self.skip_interval != self.inputs.preference::<SkipIntervalPref>()
+                    || self.instant_dpad_seeking != self.inputs.preference::<InstantDpadSeekingPref>()
+                    || self.uri_engine != self.inputs.preference::<UriEnginePref>()
+                    || self.dolby_vision != self.inputs.preference::<DolbyVisionModePref>()
+                    {
+                    self.rebuild_keeping();
+                    // An empty loading table had no engine seat. Give its first landing (or
+                    // Retry row) one so OK works immediately, without moving an existing
+                    // cursor when an ordinary save completes or another page owns focus.
+                    if !had_rows && self.form.table.n_rows() > 0 && cx.focus.current.is_none() {
+                        self.focus(fx);
+                    }
+                    fx.invalidate(plx_machine::present::Provenance::Landing(MachineId::Session));
+                }
+                self.form.table.update(t.dt(), RouteLayout::screen().sectioned_table().h);
+                self.follow.update(t.dt());
+                Handled::Yes
+            }
+            ScreenEvent::FocusMoved { to, .. } => {
+                form_focus(&mut self.form, to.elem);
+                self.state.selected = self.form.key_at(self.form.table.sel.max(0) as usize).map_or(0, |k| k.0);
+                let sentence = self.sentence().into_owned();
+                self.follow.follow(&sentence);
+                Handled::Yes
+            }
+            ScreenEvent::Activate(key) => { self.activate(*key, fx); Handled::Yes }
+            ScreenEvent::Input(InputEvent { kind: InputKind::Key { key: Key::Right, at_edge: true, .. }, .. }) => {
+                if let Some(key) = cx.focus.current.and_then(|k| form_right_target(&self.form, k.elem)) {
+                    self.activate(key, fx);
+                }
+                Handled::Yes
+            }
+            _ => Handled::No,
+        }
+    }
+}
+
+plx_ui::focusable_via_view!(PreferencesPage, InnerHost, view);
+
+impl Screen<InnerHost> for PreferencesPage {
+    fn name(&self) -> &'static str { self.state.kind.word() }
+    fn state(&self) -> &dyn LogicalState {
+        &self.state
+    }
+    fn crumb(&self, _cx: &Cx<'_, InnerHost>) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed(plx_os::i18n::msg::settings_title()))
+    }
+    fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, InnerHost>) {}
+    fn draw(&mut self, f: &mut DrawFrame<'_, '_, InnerHost>) {
+        plx_ui::screen::Part::<InnerHost>::draw(&mut self.view(), f, Rect::FULL);
+    }
+    fn render(&self) -> RenderStrategy {
+        RenderStrategy::Page
+    }
+    fn focus_source(&self) -> FocusSource {
+        FocusSource::Engine
+    }
+    fn hit_source(&self) -> HitSource {
+        HitSource::Engine
+    }
+}
+
+/// The `(focus key, destination)` of every `Nav` row a page lists for `prefs` — the structural
+/// navigation test's expectation, built by the page's own form builder.
+#[cfg(test)]
+pub fn nav_items_for_test(kind: Kind, prefs: Option<&AudioPreferences>) -> Vec<(u32, SettingsPage)> {
+    let mut form: FormTable<RowId, Action, SettingsPage> = FormTable::page(BAND);
+    form.set(field_form(&FieldListInputs { local: crate::registry::empty_fixture(), kind, quality: Quality::Original, direct_play: DirectPlayMode::Auto,
+        prefs, busy: false, show_retry: false, marker_prefs: Default::default(), read_only: false }), None);
+    (0..form.table.n_rows() as usize).filter_map(|i| match form.binding_at(i)?.kind.clone() {
+        RowKind::Nav(dest) => Some((form.key_at(i)?.0, dest)),
+        _ => None,
+    }).collect()
+}
+
+#[cfg(test)]
+#[path = "preferences_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "preferences_text_fit_tests.rs"]
+mod text_fit_tests;
+
+fn marker_label(mode: MarkerSkipMode) -> &'static str {
+    match mode {
+        MarkerSkipMode::Disabled => plx_os::i18n::msg::settings_playback_disabled(),
+        MarkerSkipMode::Manual => plx_os::i18n::msg::settings_playback_marker_manual(),
+        MarkerSkipMode::Automatic => plx_os::i18n::msg::settings_playback_marker_automatic(),
+    }
+}
+fn resolve_with_marker(field: PickerKind, quality: Quality, direct_play: DirectPlayMode,
+    prefs: Option<&AudioPreferences>, marker: MarkerPrefsView, resolution: UiResolution, local: &crate::registry::ScreenInputs) -> Value {
+    match field {
+        PickerKind::IntroSkip => Value::IntroSkip(marker.intro, marker.scope),
+        PickerKind::CreditsSkip => Value::CreditsSkip(marker.credits, marker.scope),
+        PickerKind::UiResolution => Value::UiResolution(resolution),
+        _ => resolve_value(field, quality, direct_play, prefs, local),
+    }
+}
+fn options_with_marker(field: PickerKind, quality: Quality, direct_play: DirectPlayMode,
+    prefs: Option<&AudioPreferences>, marker: MarkerPrefsView) -> Vec<(String, Value)> {
+    let kind = match field { PickerKind::IntroSkip => Some(plx_data::metadata::MarkerKind::Intro),
+        PickerKind::CreditsSkip => Some(plx_data::metadata::MarkerKind::Credits), _ => None };
+    if let Some(kind) = kind {
+        if !marker.granted(kind) { return Vec::new(); }
+        return MarkerSkipMode::LADDER.into_iter().map(|mode| (marker_label(mode).into(),
+            if kind == plx_data::metadata::MarkerKind::Intro { Value::IntroSkip(mode, marker.scope) }
+            else { Value::CreditsSkip(mode, marker.scope) })).collect();
+    }
+    field_options(field, quality, direct_play, prefs)
+}
+fn field_readout_with_marker(field: PickerKind, quality: Quality, direct_play: DirectPlayMode,
+    prefs: Option<&AudioPreferences>, marker: MarkerPrefsView, local: &crate::registry::ScreenInputs) -> String {
+    match field { PickerKind::IntroSkip => marker_label(marker.intro).into(),
+        PickerKind::CreditsSkip => marker_label(marker.credits).into(),
+        _ => field_readout(field, quality, direct_play, prefs, local) }
+}
+
+fn write_marker_prefs(c: &mut Canon, view: MarkerPrefsView) {
+    c.u64(view.scope).bool(view.needs_refresh).bool(view.intro_granted).bool(view.credits_granted)
+        .u8(view.intro.index()).u8(view.credits.index());
+}

@@ -1,0 +1,17 @@
+[
+  {
+    "name": "stable",
+    "app_id": "io.github.tiper.finnative",
+    "object_id": "finstate.stable"
+  },
+  {
+    "name": "debug",
+    "app_id": "io.github.tiper.finnative.debug",
+    "object_id": "finstate.debug"
+  },
+  {
+    "name": "nightly",
+    "app_id": "io.github.tiper.finnative.nightly",
+    "object_id": "finstate.night"
+  }
+]

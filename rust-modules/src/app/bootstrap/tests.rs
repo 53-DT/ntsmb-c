@@ -1,0 +1,975 @@
+//! Controlled-bootstrap host boundaries. The production SDL boot/loop is additionally exercised
+//! by the fresh-root simulator artifact; these tests do not claim native rendering or network.
+use super::*;
+use plx_data::stores::tape;
+use crate::app::adapters::stores::StoreRunner;
+
+// Exercise the CLI's typed producer and the product recorder, not a hand-built header.
+#[test]
+fn flow12_default_producer_long_recording_passes_current_preflight() {
+    let _serial = plx_base::testlock::serial();
+    let encoded = crate::app::synthetic_home_initial(1, 32517, Some("flow12".into())).unwrap();
+    let initial = Initial::from_value(serde_json::from_str(&encoded).unwrap()).unwrap();
+    let path = std::env::temp_dir().join(format!("plx-v11-roundtrip-{}",std::process::id()));
+    std::fs::create_dir(&path).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+    let _cleanup = Cleanup(path.clone());
+    let sink = plx_ui::rec::DirSink::create(&path).unwrap();
+    let mut recorder = super::super::recorder::Recplay::recording_with_sink(&initial, Box::new(sink)).unwrap();
+    for f in 0..3000 {
+        recorder.tick(f * 16, if f == 0 { 0.0 } else { 0.016 });
+        recorder.capture_readiness(plx_ui::rec::Readiness::default());
+        use plx_ui::dispatch::{Tap, ReplayAuthority};
+        recorder.resolve_focus(u64::from(f), 0, plx_machine::machine::EntryId(1), Some(plx_ui::dispatch::FocusAnswer {
+            outcome: plx_ui::focus::Outcome::Nothing, focus: None, group: None,
+        }));
+        recorder.effect(u64::from(f), &plx_machine::machine::Stamped {
+            from: plx_machine::machine::MachineId::Nav,
+            fx: plx_machine::machine::Fx::Remember { group: plx_machine::machine::GroupId(1), elem: 0x1001 },
+        });
+        recorder.present(false);
+        recorder.end_frame(&|| 17);
+    }
+    assert!(!recorder.finish(plx_machine::landgate::fixture_gate()));
+    let recording = Recording::load(&path, super::super::recorder::state_fp()).unwrap();
+    assert_eq!(recording.frames.len(), 3000);
+    let decoded = Initial::decode_profile(recording.header.init_data.clone(),recording.header.init_hash,recording.header.state_fp).unwrap();
+    assert_eq!(decoded.hash(), initial.hash());
+    assert_eq!(decoded.to_v6_value().unwrap(),initial.to_v6_value().unwrap());
+    super::super::recorder::validate_controlled(&recording,&decoded).unwrap();
+    super::super::recorder::validate_resolution_recording(&recording).unwrap();
+}
+
+#[test]
+fn adjacent_v11_install_boot_facts_are_strict_hashed_and_legacy_owned() {
+    use plx_os::i18n::Preference;
+    let initial = Initial::synthetic_home(17, 32517, Some("root".into())).unwrap();
+    let fp = super::super::recorder::state_fp();
+    let value = initial.to_v6_value().unwrap();
+    assert_eq!(Initial::decode_profile(value.clone(), initial.hash(), fp).unwrap().hash(), initial.hash());
+    for key in ["install_language", "running_language"] {
+        let mut changed = initial.clone();
+        if key == "install_language" { changed.install_language = Some(Preference::Be); }
+        else { changed.running_language = Some(Preference::Be); }
+        assert_ne!(changed.hash(), initial.hash(), "{key} is a canonical fact");
+        assert!(Initial::decode_profile(changed.to_v6_value().unwrap(), initial.hash(), fp).is_err());
+        assert_eq!(Initial::decode_profile(changed.to_v6_value().unwrap(), changed.hash(), fp).unwrap().hash(), changed.hash());
+        for invalid in [serde_json::Value::Null, json!(1), json!(false), json!("unknown-language"), json!({})] {
+            let mut invalid_value = value.clone(); invalid_value[key] = invalid;
+            assert!(Initial::decode_profile(invalid_value, initial.hash(), fp).is_err(), "{key}");
+        }
+        let mut missing = initial.clone();
+        if key == "install_language" { missing.install_language = None; } else { missing.running_language = None; }
+        assert!(Initial::decode_profile(missing.to_v6_value().unwrap(), missing.hash(), fp).is_err());
+        assert!(super::super::recorder::Recplay::recording_with_sink(&missing, Box::new(plx_ui::rec::MemSink::default())).is_err());
+    }
+    let mut unknown = value.clone(); unknown["install_unknown"] = json!(true);
+    assert!(Initial::decode_profile(unknown, initial.hash(), fp).is_err());
+    assert!(Initial::decode_profile(value, initial.hash(), super::super::recorder::state_fp_v10()).is_err());
+    assert_eq!(serde_json::to_value(initial.ui_preferences.as_ref().unwrap()).unwrap().as_object().unwrap().len(), 13);
+}
+
+#[test]
+fn v12_install_hold_hint_is_explicit_typed_hashed_and_not_ambient() {
+    let initial = Initial::synthetic_home(17, 32517, None).unwrap();
+    let fp = super::super::recorder::state_fp();
+    for card in [false, true] { for pill in [false, true] {
+        let mut captured = initial.clone();
+        captured.install_hold_hint = Some(InstallHoldHint { card, pill });
+        let value = captured.to_v6_value().unwrap();
+        let decoded = Initial::decode_profile(value.clone(), captured.hash(), fp).unwrap();
+        assert_eq!(decoded.install_hold_hint.unwrap().input(),
+            plx_machine::machine::HoldHintRead { learned: false, card, pill, context: 0 });
+        if card || pill { assert_ne!(captured.hash(), initial.hash()); }
+        for invalid in [json!(null), json!(true), json!(0), json!({}),
+            json!({"card":"true","pill":false}), json!({"card":false,"pill":true,"extra":false})] {
+            let mut bad = value.clone(); bad["install_hold_hint"] = invalid;
+            assert!(Initial::decode_profile(bad, captured.hash(), fp).is_err());
+        }
+        let mut missing = value; missing.as_object_mut().unwrap().remove("install_hold_hint");
+        assert!(Initial::decode_profile(missing, captured.hash(), fp).is_err());
+        // Contrast a differently captured Session preference: only the explicit boot fact
+        // seeds Input, even though that old Session projection does not canonicalize it.
+        let mut contrasting = decoded;
+        contrasting.session.persisted = contrasting.session.persisted.with_hold_hint_taught(
+            plx_plex::plex::session::HoldHintTaught { card: true, pill: true });
+        assert_eq!(contrasting.install_hold_hint.unwrap().input(),
+            plx_machine::machine::HoldHintRead { learned: false, card, pill, context: 0 });
+    }}
+    let mut missing = initial;
+    missing.install_hold_hint = None;
+    assert!(super::super::recorder::Recplay::recording_with_sink(&missing,
+        Box::new(plx_ui::rec::MemSink::default())).is_err());
+}
+
+#[test]
+fn controlled_boot_binds_policy_and_keeps_legacy_default_explicit() {
+    let _serial = plx_base::testlock::serial();
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let mut initial = Initial::synthetic_home(17, 32517, None).unwrap();
+    initial.runtime_policy = Some(RuntimePolicy { harness_driven: true, lookahead_rows: 0 });
+    let (runtime, retained) = crate::app::bridge::BridgeRetained::controlled_home(|| 0, crate::app::platform::Platform::HOST_TEST.shell, &initial, &mt, true);
+    let first = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
+    initial.runtime_policy = Some(RuntimePolicy { harness_driven: false, lookahead_rows: 4 });
+    let (runtime, retained) = crate::app::bridge::BridgeRetained::controlled_home(|| 0, crate::app::platform::Platform::HOST_TEST.shell, &initial, &mt, true);
+    let second = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
+    assert!(first.views().inputs.runtime_policy.harness_driven);
+    assert_eq!(first.views().inputs.runtime_policy.lookahead_rows, 0);
+    assert!(!second.views().inputs.runtime_policy.harness_driven);
+    assert_eq!(second.views().inputs.runtime_policy.lookahead_rows, 4);
+    assert!(!first.views().inputs.same_facts(second.views().inputs));
+    assert!(!first.views().native_preview_available && !second.views().native_preview_available,
+        "controlled owners never expose a native preview port, independent of harness policy");
+    initial.runtime_policy = None;
+    let (runtime, retained) = crate::app::bridge::BridgeRetained::controlled_home(|| 0, crate::app::platform::Platform::HOST_TEST.shell, &initial, &mt, true);
+    let legacy = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
+    assert_eq!(legacy.views().inputs.runtime_policy, plx_screens::inputs::RuntimePolicy::default());
+    assert!(crate::app::recorder::Recplay::recording_with_sink(&initial, Box::new(plx_ui::rec::MemSink::default())).is_err());
+}
+
+#[test]
+fn controlled_initial_records_runtime_policy() {
+    let initial = Initial::synthetic_home(17, 32517, None).unwrap();
+    let value = serde_json::to_value(&initial).unwrap();
+    assert!(value.get("runtime_policy").is_some(), "controlled bootstrap must record runtime policy");
+    let mut changed = initial.clone();
+    changed.runtime_policy.as_mut().unwrap().lookahead_rows = 0;
+    assert_ne!(initial.hash(), changed.hash());
+    changed.runtime_policy.as_mut().unwrap().harness_driven = false;
+    let value = changed.to_v6_value().unwrap();
+    let decoded = Initial::decode_profile(value, changed.hash(), super::super::recorder::state_fp()).unwrap();
+    assert!(!decoded.runtime_policy.unwrap().harness_driven);
+    assert_eq!(decoded.runtime_policy.unwrap().lookahead_rows, 0);
+    let mut invalid = changed.to_v6_value().unwrap();
+    invalid["runtime_policy"]["lookahead_rows"] = serde_json::json!(5);
+    assert!(Initial::decode_profile(invalid, changed.hash(), super::super::recorder::state_fp()).is_err());
+}
+
+#[test]
+fn session_codec_profiles_require_canonical_exact_matching_envelopes() {
+    let initial = Initial::synthetic_home(17, 32517, None).unwrap();
+    let mut historical = initial.clone();
+    historical.runtime_policy = None;
+    historical.ui_preferences = None;
+    historical.install_language = None;
+    historical.running_language = None;
+    historical.install_hold_hint = None;
+    let legacy = serde_json::to_value(&historical).unwrap();
+    let legacy_v6 = historical.to_v6_value().unwrap();
+    let legacy_hash = historical.hash();
+    let current = initial.to_v6_value().unwrap();
+    let prior = super::super::recorder::FP_PRIOR;
+    let v6 = super::super::recorder::FP_V6;
+    let owned = super::super::recorder::state_fp();
+    assert_eq!(Initial::decode_profile(current.clone(), initial.hash(), owned).unwrap().hash(), initial.hash());
+    assert!(Initial::decode_profile(legacy.clone(), initial.hash(), owned).is_err());
+    assert_eq!(current["session"], serde_json::json!({"codec":6,"boot":legacy["session"]}));
+    for fp in [prior, v6, super::super::recorder::state_fp_v7(), super::super::recorder::state_fp_v11()] {
+        assert_eq!(Initial::decode_profile(legacy.clone(), legacy_hash, fp).err(),
+            Some("incompatible owner-input/presentation state; requires V13 capture"));
+    }
+    assert!(Initial::decode_profile(legacy_v6, legacy_hash, owned).is_err());
+    assert!(Initial::decode_profile(current.clone(), initial.hash(), prior).is_err());
+    assert!(Initial::decode_profile(current.clone(), initial.hash(), v6).is_err());
+    assert!(Initial::decode_profile(current.clone(), initial.hash(), prior).is_err());
+    assert!(Initial::decode_profile(legacy.clone(), initial.hash(), v6).is_err());
+    for historic in [5612583773909772043u64, 14623229906352324261u64] {
+        assert!(Initial::decode_profile(legacy.clone(), initial.hash(), historic).is_err());
+        assert!(Initial::decode_profile(current.clone(), initial.hash(), historic).is_err());
+    }
+    assert!(Initial::decode_profile(current.clone(), initial.hash(), v6 ^ 1).is_err());
+    assert!(Initial::decode_profile(current.clone(), initial.hash() ^ 1, owned).is_err());
+    let mut bad = current.clone(); bad["version"] = serde_json::json!(2);
+    assert!(Initial::decode_profile(bad, initial.hash(), owned).is_err());
+    let mut bad = current.clone(); bad["session"].as_object_mut().unwrap().remove("boot");
+    assert!(Initial::decode_profile(bad, initial.hash(), owned).is_err());
+    let mut bad = current.clone(); bad["session"]["codec"] = serde_json::json!(5);
+    assert!(Initial::decode_profile(bad, initial.hash(), owned).is_err());
+    let mut bad = current.clone(); bad["session"]["extra"] = serde_json::json!(true);
+    assert!(Initial::decode_profile(bad, initial.hash(), owned).is_err());
+    let mut bad = current.clone(); bad["session"]["boot"]["signin_account"] = serde_json::json!("private");
+    assert!(Initial::decode_profile(bad, initial.hash(), owned).is_err());
+    let mut bad = current.clone(); bad["session"]["boot"].as_object_mut().unwrap().remove("next_req");
+    assert!(Initial::decode_profile(bad, initial.hash(), owned).is_err());
+    let mut bad = current; bad["session"]["boot"]["next_req"] = serde_json::json!(1);
+    assert!(Initial::decode_profile(bad, initial.hash(), owned).is_err());
+}
+
+// Probe only until the coordinator captures and installs literal bytes and hashes.
+#[test]
+fn session_app_initial_probe_only() {
+    let mut initial = Initial::synthetic_home(17, 32517, None).unwrap();
+    initial.runtime_policy = None; // Explicit frozen V5 fixture, not the current writer.
+    initial.ui_preferences = None;
+    initial.install_language = None;
+    initial.running_language = None;
+    initial.install_hold_hint = None;
+    let value = serde_json::to_value(&initial).unwrap();
+    let bytes = serde_json::to_vec(&initial).unwrap();
+    assert_eq!(bytes.as_slice(), include_bytes!("../fixtures/session-codec-v5/initial-v5.json"));
+    let frozen_hashes: serde_json::Value = serde_json::from_str(include_str!("../fixtures/session-codec-v5/initial-hashes.json")).unwrap();
+    assert_eq!(frozen_hashes["canon_finish"].as_u64(), Some(14618251649147468963u64));
+    assert_eq!(frozen_hashes["outer_hash"].as_u64(), Some(14618251649147468963u64));
+    let mut canon = Canon::new();
+    initial.write(&mut canon);
+    let outer_hash = initial.hash();
+    assert_eq!(canon.finish(), 14618251649147468963u64);
+    assert_eq!(outer_hash, 14618251649147468963u64);
+    assert_eq!(initial.version, 1);
+    assert_eq!(Initial::decode(value.clone(), outer_hash).unwrap().hash(), outer_hash);
+    assert!(Initial::decode(value.clone(), outer_hash ^ 1).is_err());
+    let mut unknown = value.clone();
+    unknown["unexpected"] = serde_json::json!(true);
+    assert!(Initial::from_value(unknown).is_err());
+    let mut nested_unknown = value.clone();
+    nested_unknown["session"]["signin_account"] = serde_json::json!("injected");
+    assert!(Initial::from_value(nested_unknown).is_err());
+    let mut missing = value;
+    missing.as_object_mut().unwrap().remove("settings");
+    assert!(Initial::from_value(missing).is_err());
+    if let Some(dir) = std::env::var_os("PLX_SESSION_APP_V5_GOLDEN_OUT") {
+        let dir = std::path::Path::new(&dir);
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("session-app-initial-v5.json"), bytes).unwrap();
+        std::fs::write(dir.join("session-app-initial-hashes.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({"canon_finish": canon.finish(), "outer_hash": outer_hash})).unwrap()).unwrap();
+    }
+}
+
+/// One controlled Hubs step as the Bridge's controlled arm runs it: the store's step against an
+/// empty Browse directory and the registry's keys (`cmd: None` is the tick), then every job it
+/// emitted started through the run's admission ledger.
+fn controlled_hubs(io: &mut HomeIo, runner: &mut StoreRunner, hubs: &mut plx_data::stores::hubs::HubsStore,
+    cmd: Option<plx_data::stores::hubs::HubsCmd>, dt: f32) -> plx_data::stores::StoreOutcome {
+    let directory = plx_data::stores::browse::DirectorySnapshot::default();
+    let mut keys = plx_plex::plex::ClientKeys::default();
+    crate::app::adapters::stores::refill_client_keys(&mut keys);
+    let outcome = match cmd {
+        Some(cmd) => hubs.run_with_directory(cmd, directory.view(), &keys),
+        None => hubs.tick_with_directory(dt, directory.view(), &keys),
+    };
+    for job in hubs.take_jobs() {
+        runner.start_admitted(job, Some(io));
+    }
+    outcome
+}
+
+/// One controlled discovery step as the Bridge's controlled arm runs it: the registry's keys, the
+/// store's step, then every job it emitted started through the run's admission ledger.
+fn controlled_discovery(io: &mut HomeIo, runner: &mut StoreRunner, stores: &mut plx_data::stores::Stores) {
+    let mut keys = plx_plex::plex::ClientKeys::default();
+    crate::app::adapters::stores::refill_client_keys(&mut keys);
+    stores.browse.borrow().observe_pin_write();
+    let session = plx_plex::plex::session::peek();
+    let visible_generation = plx_plex::plex::session::visible_generation();
+    let settled = plx_plex::plex::session::peek_settled().is_some();
+    let profile_key = plx_plex::plex::session::current_profile_key();
+    stores.browse_controlled_discover(&plx_data::browse::BrowseRosterInput { tenure: 0,
+        keys: &keys, session: &session, visible_generation, settled, profile_key: &profile_key,
+    });
+    for job in stores.take_jobs_of(plx_data::stores::StoreId::Browse) {
+        runner.start_admitted(job, Some(io));
+    }
+}
+
+#[test]
+fn filmography_initial_requires_complete_typed_inputs() {
+    let mut value = serde_json::to_value(Initial::synthetic_home(1, 32498, None).unwrap()).unwrap();
+    value["content"] = serde_json::json!({"detail":"1001", "detailsec":1,
+        "detailok":true, "filmography":true, "personcredits":9, "nowan":true});
+    for trigger in ["detail", "detailsec", "detailok", "filmography", "personcredits", "nowan"] {
+        value["triggers"].as_array_mut().unwrap().push(serde_json::json!(format!("plxnative-{trigger}")));
+    }
+    let initial = Initial::from_value(value.clone()).expect("complete filmography boot");
+    assert_ne!(initial.hash(), Initial::synthetic_home(1, 32498, None).unwrap().hash());
+    value["content"].as_object_mut().unwrap().remove("detailsec");
+    assert!(Initial::from_value(value).is_err());
+}
+
+#[test]
+fn content_resources_deny_execution_and_require_exact_admissions() {
+    let _guard = plx_base::testlock::serial();
+    let initial = Initial::synthetic_home(1, 32498, None).unwrap();
+    tape::init(initial.person_credits(), true);
+    let request = serde_json::json!({"store":"metadata","sid":0,"rk":"1001","gen":1,"client":1});
+    let admission = serde_json::json!({"content_resource":true,"request":request,"admitted":false});
+    tape::validate_admission(&admission, 1).unwrap();
+    tape::begin([admission.clone()].into(), Default::default());
+    assert!(!tape::admit(request.clone(), || panic!("replay executed a resource")));
+    assert_eq!(tape::finish(), (vec![admission.clone()], None));
+    let mut accepted = admission.clone();
+    accepted["admitted"] = serde_json::json!(true);
+    tape::begin([accepted.clone()].into(), Default::default());
+    assert!(tape::admit(request.clone(), || panic!("admitted replay executed a resource")));
+    assert!(tape::poll::<serde_json::Value>("person", 0,
+        || panic!("empty replay polled a live mailbox")).is_none());
+    assert_eq!(tape::finish(), (vec![accepted], None));
+    tape::begin([admission].into(), Default::default());
+    let mut wrong = request;
+    wrong["rk"] = serde_json::json!("1002");
+    assert!(!tape::admit(wrong, || panic!("mismatched request executed")));
+    assert_eq!(tape::finish().1, Some("mismatched content resource admission"));
+    tape::reset_for_test();
+}
+
+#[test]
+fn controlled_script_input_roundtrips_without_claiming_a_physical_key() {
+    for event in super::super::bridge::script_key(plx_machine::machine::Key::Down,
+        plx_machine::machine::Tick { ms:646, dt_us:0 }) {
+        let value = effects::input(&event).unwrap();
+        assert_eq!(effects::input(&effects::decode_input(&value).unwrap()).unwrap(), value);
+        let mut wrong = value;
+        wrong["body"]["at_edge"] = serde_json::json!(true);
+        assert!(effects::decode_input(&wrong).is_err());
+    }
+}
+
+#[test]
+fn settings_initial_is_typed_hashed_and_bound_to_its_trigger() {
+    let initial = Initial::synthetic_home(17, 32517, Some("root".into())).unwrap();
+    assert_eq!(initial.settings.as_deref(), Some("root"));
+    assert!(initial.triggers.iter().any(|trigger| trigger == "plxnative-settings"));
+    let encoded = serde_json::to_value(&initial).unwrap();
+    let decoded = Initial::from_value(encoded).unwrap();
+    assert_eq!(decoded.hash(), initial.hash());
+
+    for target in ["playback", "picker-quality"] {
+        let mut deep = initial.clone();
+        deep.settings = Some(target.into());
+        assert_eq!(deep.validate(), Ok(()), "{target} is a supported initial Settings input");
+    }
+    let mut bad_value = initial.clone();
+    bad_value.settings = Some("other".into());
+    assert_eq!(bad_value.validate(), Err("unsupported initial Settings input"));
+
+    let mut missing_trigger = initial.clone();
+    missing_trigger.triggers.retain(|trigger| trigger != "plxnative-settings");
+    assert_eq!(missing_trigger.validate(), Err("incoherent initial Settings input"));
+
+    let plain = Initial::synthetic_home(17, 32517, None).unwrap();
+    assert_ne!(plain.hash(), initial.hash());
+}
+use plx_machine::machine::{InputEvent, InputKind, Key, Edge, Source, Tick};
+use serde_json::json;
+
+#[test]
+fn committed_replay_initials_remain_canonical_and_hash_bound() {
+    for (name, manifest) in [
+        ("1-boot-home-chip-grid", include_str!("../../../../tests/fixtures/replay/1-boot-home-chip-grid/manifest.json")),
+        ("6-settings-family", include_str!("../../../../tests/fixtures/replay/6-settings-family/manifest.json")),
+        ("12-filmography-detail-return", include_str!("../../../../tests/fixtures/replay/12-filmography-detail-return/manifest.json")),
+        ("12-filmography-detail-return-current", include_str!("../../../../tests/fixtures/replay/12-filmography-detail-return-current/manifest.json")),
+    ] {
+        let manifest: serde_json::Value = serde_json::from_str(manifest).unwrap();
+        let value = manifest["init"]["data"].clone();
+        let expected_hash = manifest["init"]["hash"].as_u64().unwrap();
+        let fp = manifest["state_fp"].as_u64().unwrap();
+        if fp == super::super::recorder::FP_PRIOR {
+            Initial::from_value(value.clone()).unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+        assert_eq!(Initial::decode_profile(value, expected_hash, fp).err(),
+            Some("incompatible owner-input/presentation state; requires V13 capture"), "{name}");
+    }
+}
+
+#[test]
+fn typed_initial_roundtrip_and_hidden_input_hash_are_complete() {
+    let initial = Initial::synthetic_home(17, 32517, None).unwrap();
+    let value = serde_json::to_value(&initial).unwrap();
+    assert_eq!(Initial::decode(value.clone(), initial.hash()).unwrap().hash(), initial.hash());
+    let mut changed = initial.clone();
+    changed.consent.errors = true;
+    changed.validate().unwrap();
+    assert_ne!(changed.hash(), initial.hash(), "automation hides the prompt, not its logical initial decision");
+    assert_ne!(super::super::recorder::state_hash("home","","",0,0,0,initial.hash()),
+        super::super::recorder::state_hash("home","","",0,0,0,changed.hash()));
+    assert!(Initial::decode(serde_json::to_value(&changed).unwrap(),initial.hash()).is_err());
+    let mut unknown = value.clone(); unknown["unrecognized"] = json!(true);
+    assert!(Initial::from_value(unknown).is_err());
+    let mut inconsistent = value.clone(); inconsistent["session"]["next_req"] = json!(1);
+    assert!(Initial::from_value(inconsistent).is_err());
+    let mut missing = value.clone(); missing.as_object_mut().unwrap().remove("entropy");
+    assert!(Initial::from_value(missing).is_err());
+    assert!(Initial::from_value(json!({})).is_err());
+    let mut bad_seed = value; bad_seed["entropy"] = json!({"Seeded":18});
+    assert!(Initial::from_value(bad_seed).is_err());
+}
+
+#[test]
+fn screen_input_codec_retains_full_time_source_edge_and_hit_identity() {
+    for source in [Source::Sdl,Source::RemoteFifo,Source::Script,Source::Replay] {
+        for edge in [Edge::Down,Edge::Repeat,Edge::Up] {
+            let input = InputEvent { at:Tick { ms:u32::MAX-3,dt_us:17 },source,
+                kind:InputKind::Key { key:Key::Left,sym:1073741904,wcode:0,edge,at_edge:false } };
+            let encoded = effects::input(&input).unwrap();
+            let decoded = effects::decode_input(&encoded).unwrap();
+            assert_eq!(effects::input(&decoded).unwrap(),encoded);
+            let mut changed = input.clone(); changed.at.ms -= 1;
+            assert_ne!(effects::input(&changed).unwrap(),encoded);
+            let mut changed = input.clone();
+            if let InputKind::Key { at_edge,.. } = &mut changed.kind { *at_edge = true; }
+            assert_ne!(effects::input(&changed).unwrap(),encoded);
+            assert!(effects::decode_input(&effects::input(&changed).unwrap()).is_err(),"an engine re-delivery is not external ingress");
+        }
+    }
+    let pointer = |hit| InputEvent { at:Tick {ms:7,dt_us:0},source:Source::Sdl,
+        kind:InputKind::Pointer {x:-0.0,y:1.5,hit} };
+    assert_ne!(effects::input(&pointer(Some(1))).unwrap(), effects::input(&pointer(Some(2))).unwrap());
+    assert_ne!(effects::input(&pointer(None)).unwrap(),effects::input(&pointer(Some(1))).unwrap());
+}
+
+fn activate(bridge: &mut super::super::bridge::Bridge) {
+    let mut dispatcher = plx_ui::dispatch::Dispatcher::<super::super::bridge::AppHost>::new();
+    super::super::bridge::execute_session_command(&mut dispatcher,plx_session::auth::SessionCmd::ActivateDevBootstrap);
+    dispatcher.frame_with(bridge,Tick::default(),Vec::new(),Vec::new(),&mut plx_ui::dispatch::NoTap,false);
+    assert!(bridge.take_session_ready().is_some());
+}
+
+#[test]
+fn normal_and_controlled_activation_publish_the_owner_supplied_scope() {
+    let _serial = plx_base::testlock::serial();
+    let session = plx_plex::plex::session::TempSession::new("controlled-profile-boundary");
+    session.assert_only_target();
+    let before = std::fs::read(session.path()).unwrap();
+    struct RegistryCleanup;
+    impl Drop for RegistryCleanup { fn drop(&mut self) { plx_plex::plex::reset_servers_for_test(); } }
+    let _cleanup = RegistryCleanup;
+    plx_plex::plex::reset_servers_for_test();
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let initial = Initial::synthetic_home(19,9,None).unwrap();
+    let (runtime, retained) = super::super::bridge::BridgeRetained::new(
+        ||0, crate::app::platform::Platform::HOST_TEST.shell, initial.session.clone(), initial.consent.clone(), &mt);
+    let mut live_owner = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
+    let mut live = live_owner.bridge();
+    activate(&mut live);
+    let live_view = live.profile_resource_view().unwrap();
+    let live_owner = live.snapshot_session_init();
+    assert_eq!(live_view.generation,live_owner.profile_scope.0);
+    assert_ne!(live_view.generation,0);
+    let ambient = plx_plex::plex::session::current_snapshot();
+    plx_plex::plex::reset_servers_for_test();
+    plx_plex::plex::Client::restore_generation_seed(initial.primary_client).unwrap();
+    let (runtime, retained) = super::super::bridge::BridgeRetained::controlled_home(||0, crate::app::platform::Platform::HOST_TEST.shell, &initial,&mt,true);
+    let mut controlled_owner = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
+    let mut controlled = controlled_owner.bridge();
+    let retained = controlled.profile_resource_view().unwrap();
+    activate(&mut controlled);
+    let scoped = controlled.profile_resource_view().unwrap();
+    assert_eq!(scoped.generation,controlled.snapshot_session_init().profile_scope.0);
+    assert_eq!(scoped.generation,live_view.generation);
+    assert_eq!(serde_json::to_value(&scoped.user).unwrap(),serde_json::to_value(&live_view.user).unwrap());
+    assert_eq!(retained.generation,0,"old scoped resource read remains immutable");
+    assert!(std::sync::Arc::ptr_eq(&ambient,&plx_plex::plex::session::current_snapshot()),"scoped replay never replaces ambient publication");
+    assert_eq!(std::fs::read(session.path()).unwrap(),before);
+    controlled.bind_primary(initial.primary_client).unwrap();
+    let client = controlled.recorded_client(initial.primary_client).unwrap();
+    assert_eq!(client.denied_data_requests(),0);
+    assert!(client.sections().is_none(),"real Client GET is denied before HTTP");
+    assert!(client.fetch_built("/synthetic").is_none(),"poster HTTP arm is denied too");
+    assert_eq!(client.denied_data_requests(),2);
+    assert_eq!(controlled.controlled_failure(),Some("unrecorded client IO attempted"));
+}
+
+/// **Stage B regression, device-affecting.** Before `0d466527` (stage B), `tape::init` ended
+/// with `plx_data::metadata::record::reset(initial.content.is_some())`, arming the crate-global
+/// `Tracker` for controlled-content recording of detail terminals. Stage B deleted that line with
+/// the static and nothing armed the per-owner replacement in production, so a `Bridge` built by
+/// `controlled_home` carried a permanently-disabled Tracker (`Tracker::new(false)`, `MetadataStore`'s
+/// own `Default`): every detail landing while the tape was active silently produced NO recorded
+/// terminal at all (`drain_live` -> `Some(([], drain))`), and the device-side validator rejected
+/// `{"data":[]}` as "noncanonical detail replies". This pins `Bridge::controlled_home` actually
+/// arming its own `MetadataStore`'s Tracker from `initial.content.is_some()`.
+#[test]
+fn controlled_home_arms_the_detail_tracker_when_content_initial_is_present() {
+    let _serial = plx_base::testlock::serial();
+    plx_plex::plex::reset_servers_for_test();
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let mut initial = Initial::synthetic_home(41, 17, None).unwrap();
+    initial.content = Some(ContentInitial {
+        detail: "show".into(), detailsec: 0, detailok: true,
+        filmography: false, personcredits: 0, nowan: false,
+    });
+    plx_data::stores::tape::init(initial.person_credits(), false);
+    plx_machine::landgate::arm_recording();
+    let (runtime, retained) = super::super::bridge::BridgeRetained::controlled_home(||0, crate::app::platform::Platform::HOST_TEST.shell, &initial,&mt,false);
+    let mut harness = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
+    let mut bridge = harness.bridge();
+    let sid = plx_plex::plex::ServerId::UNSET;
+    plx_data::stores::tape::begin(Default::default(), Default::default());
+    let gen = plx_data::metadata::begin_detail_for_test(bridge.metadata_mut().adapter_ref(), sid, "show");
+    {
+        let store = bridge.metadata_mut();
+        let (state, adapter) = store.split_for_test();
+        plx_data::metadata::land_detail_for_test(&plx_plex::plex::ClientKeys::default(), true, state, adapter, sid, "show", gen,
+            Some(plx_data::metadata::Detail { sid, rk: "show".into(), ..Default::default() }));
+    }
+    let results = plx_data::stores::tape::take_results();
+    assert_eq!(results.len(), 1,
+        "controlled_home must arm this Bridge's own MetadataStore Tracker from initial.content, \
+         or a controlled-content detail landing never reaches stores::tape at all");
+    plx_data::stores::tape::finish();
+    plx_machine::landgate::disarm();
+    plx_data::stores::tape::reset_for_test();
+    plx_plex::plex::reset_servers_for_test();
+}
+
+#[test]
+fn captured_preference_bootstrap_is_canonical_hashed_and_current_profile_required() {
+    use plx_plex::plex::session::DeckPress;
+    let mut initial = Initial::synthetic_home(23, 32517, None).unwrap();
+    let original = initial.hash();
+    initial.ui_preferences.as_mut().unwrap().deck_press = Some(DeckPress::Play);
+    assert_ne!(initial.hash(), original);
+    let value = initial.to_v6_value().unwrap();
+    let fp = super::super::recorder::state_fp();
+    assert!(Initial::decode_profile(value.clone(), initial.hash(), fp).is_ok());
+    let mut missing = value.clone();
+    missing.as_object_mut().unwrap().remove("ui_preferences");
+    assert!(Initial::decode_profile(missing, initial.hash(), fp).is_err());
+    for (key, value) in [("deck_press", json!("invalid")), ("unexpected", json!(true))] {
+        let mut raw = serde_json::to_value(&initial).unwrap();
+        raw["ui_preferences"][key] = value;
+        assert!(Initial::from_value(raw).is_err(), "{key}");
+    }
+    let mut raw = serde_json::to_value(&initial).unwrap();
+    raw["ui_preferences"].as_object_mut().unwrap().remove("deck_press");
+    assert!(Initial::from_value(raw).is_err());
+}
+
+#[test]
+fn v10_preferences_bind_every_typed_field_and_refuse_noncanonical_profiles() {
+    let initial = Initial::synthetic_home(23, 32517, None).unwrap();
+    let fp = super::super::recorder::state_fp();
+    let value = initial.to_v6_value().unwrap();
+    let alternatives = [
+        ("playback_quality", json!("auto")), ("direct_play_mode", json!("forced")),
+        ("subtitle_tone", json!("yellow")), ("subtitle_size", json!("large")),
+        ("subtitle_position", json!("high")), ("hdr_overlay_brightness", json!("half")),
+        ("next_episode_mode", json!("off")), ("skip_interval", json!("30s")),
+        ("instant_dpad_seeking", json!("on")), ("uri_engine", json!("on")),
+        ("dolby_vision_mode", json!("off")), ("deck_press", json!("play")),
+    ];
+    assert_eq!(value["ui_preferences"].as_object().unwrap().len(), 13);
+    assert_eq!(Initial::decode_profile(value.clone(), initial.hash(), fp).unwrap().hash(), initial.hash());
+    for (key, alternate) in alternatives {
+        let mut raw = serde_json::to_value(&initial).unwrap();
+        assert_ne!(raw["ui_preferences"][key], alternate, "{key}");
+        raw["ui_preferences"][key] = alternate;
+        let changed = Initial::from_value(raw).unwrap();
+        assert_ne!(changed.hash(), initial.hash(), "{key}");
+        assert!(Initial::decode_profile(changed.to_v6_value().unwrap(), initial.hash(), fp).is_err(), "{key}");
+        assert_eq!(Initial::decode_profile(changed.to_v6_value().unwrap(), changed.hash(), fp).unwrap().hash(), changed.hash());
+    }
+    let mut changed = initial.clone();
+    let under = changed.ui_preferences.as_mut().unwrap().under_posters.as_mut().unwrap();
+    under.title = !under.title;
+    assert_ne!(changed.hash(), initial.hash(), "under_posters");
+    assert_eq!(Initial::decode_profile(changed.to_v6_value().unwrap(), changed.hash(), fp).unwrap().hash(), changed.hash());
+    for key in value["ui_preferences"].as_object().unwrap().keys() {
+        let mut missing = value.clone();
+        missing["ui_preferences"].as_object_mut().unwrap().remove(key);
+        assert!(Initial::decode_profile(missing, initial.hash(), fp).is_err(), "missing {key}");
+        for malformed in [json!(null), json!(42), json!([]), json!({}), json!("unknown")] {
+            let mut bad = value.clone();
+            bad["ui_preferences"][key] = malformed;
+            assert!(Initial::decode_profile(bad, initial.hash(), fp).is_err(), "malformed {key}");
+        }
+    }
+    for (key, extra) in [("trailer_autoplay", json!(true)), ("unknown", json!(true))] {
+        let mut bad = value.clone();
+        bad["ui_preferences"][key] = extra;
+        assert!(Initial::decode_profile(bad, initial.hash(), fp).is_err(), "extra {key}");
+    }
+    let mut bad = value.clone();
+    bad["ui_preferences"]["under_posters"]["detail_parts"] = json!(["unknown"]);
+    assert!(Initial::decode_profile(bad, initial.hash(), fp).is_err());
+    for fingerprint in [super::super::recorder::FP_PRIOR, super::super::recorder::FP_V6,
+        super::super::recorder::state_fp_v7(), super::super::recorder::state_fp_v9(), fp ^ 1] {
+        assert!(Initial::decode_profile(value.clone(), initial.hash(), fingerprint).is_err());
+    }
+    assert!(Initial::decode_profile(value.clone(), initial.hash() ^ 1, fp).is_err());
+    let mut six = value;
+    six["ui_preferences"].as_object_mut().unwrap().retain(|key, _| matches!(key.as_str(),
+        "deck_press" | "under_posters" | "instant_dpad_seeking" | "playback_quality" | "subtitle_size" | "subtitle_position"));
+    assert!(Initial::decode_profile(six.clone(), initial.hash(), fp).is_err());
+    assert!(Initial::decode_profile(six, initial.hash(), super::super::recorder::state_fp_v9()).is_err());
+    let mut missing = initial;
+    missing.ui_preferences = None;
+    assert!(super::super::recorder::Recplay::recording_with_sink(&missing, Box::new(plx_ui::rec::MemSink::default())).is_err());
+}
+
+fn recording(initial: &Initial) -> Recording {
+    let mut header = plx_ui::rec::Header::new(super::super::recorder::state_fp(),initial);
+    header.init_data = serde_json::to_value(initial).unwrap();
+    header.features = super::super::recorder::features();
+    header.triggers = initial.triggers.clone();
+    Recording { header,frames:vec![plx_ui::rec::Frame { f:0,tick:Some(Tick::default()),st:Some(0),..Default::default() }],
+        metrics:Default::default(),stopped_at:None }
+}
+
+#[test]
+fn whole_record_preflight_rejects_bad_late_results_and_markers_without_resources() {
+    let initial = Initial::synthetic_home(23,32517,None).unwrap();
+    let mut record = recording(&initial);
+    super::super::recorder::validate_controlled(&record,&initial).unwrap();
+    record.frames[0].st = None;
+    assert!(super::super::recorder::validate_controlled(&record,&initial).is_err(),"missing state grades cannot produce an empty SAME");
+    record.frames[0].st = Some(0);
+    record.frames.push(plx_ui::rec::Frame { f:1,tick:Some(Tick {ms:16,dt_us:16000}),
+        results:vec![json!({"f":1,"t":"async","to":"store:1","req":1,"payload":{
+            "kind":"hubs","version":1,"gen":1,"seq":1,"sid":0,"client":1,"token_gen":1,"build":null}})],
+        lands:vec![(1,1,1)],st:Some(0),present:Some(false),readiness:Some(plx_ui::rec::Readiness { snapshot: true, text: false }),..Default::default() });
+    super::super::recorder::validate_controlled(&record,&initial).unwrap();
+    record.frames[1].present = None;
+    assert!(super::super::recorder::validate_controlled(&record,&initial).is_err());
+    record.frames[1].present = Some(false);
+    for field in ["client","token_gen","sid"] {
+        let saved = record.frames[1].results[0].clone();
+        record.frames[1].results[0]["payload"][field] = json!(33);
+        assert!(super::super::recorder::validate_controlled(&record,&initial).is_err());
+        record.frames[1].results[0] = saved;
+    }
+    record.frames[1].results.push(json!({"f":1,"t":"async","to":"store:1","req":2,"payload":{"kind":"unimplemented"}}));
+    assert!(super::super::recorder::validate_controlled(&record,&initial).is_err(),"valid prefix cannot hide unsupported suffix");
+    record.frames[1].results.pop();
+    record.frames[1].effects.push(json!({"f":1,"t":"eff","e":"Deliver","from":"Nav",
+        "payload":{"unsupported":"unsupported Home screen delivery"}}));
+    assert!(super::super::recorder::validate_controlled(&record,&initial).is_err());
+}
+
+#[test]
+fn controlled_hubs_commands_preserve_normal_store_notice_bookkeeping() {
+    let _serial = plx_base::testlock::serial();
+    plx_plex::plex::reset_servers_for_test();
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let publisher = plx_plex::plex::session::ProfilePublisher::scoped(&mt);
+    let mut io = HomeIo { replay:true,preferences:Default::default(),requests:Vec::new(),admissions:Default::default(),
+        failure:None,profile:publisher.snapshot() };
+    let mut hubs = plx_data::stores::hubs::HubsStore::default();
+    let mut runner = StoreRunner::live();
+    for command in [plx_data::stores::hubs::HubsCmd::Reset,plx_data::stores::hubs::HubsCmd::RefetchHubs,
+        plx_data::stores::hubs::HubsCmd::Retry] {
+        let before = hubs.gen();
+        let normal = hubs.run(command.clone());
+        let delta = hubs.gen().wrapping_sub(before);
+        let before = hubs.gen();
+        let controlled = controlled_hubs(&mut io, &mut runner, &mut hubs, Some(command),0.0);
+        assert_eq!(controlled.changed,normal.changed);
+        assert_eq!(hubs.gen().wrapping_sub(before),delta,
+            "controlled resource execution must not drop the Store machine's notice");
+    }
+}
+
+#[test]
+fn controlled_admission_records_real_discovery_spawn_refusal() {
+    let _serial = plx_base::testlock::serial();
+    plx_plex::plex::reset_servers_for_test();
+    let sid = plx_plex::plex::register_for_test("s00000001", "127.0.0.1", 9, "s00000002", "s00000003");
+    assert!(plx_plex::plex::set_current(sid));
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let publisher = plx_plex::plex::session::ProfilePublisher::scoped(&mt);
+    let mut io = HomeIo { replay:false,preferences:Default::default(),requests:Vec::new(),admissions:Default::default(),
+        failure:None,profile:publisher.snapshot() };
+    let mut stores = plx_data::stores::Stores::default();
+    let mut runner = StoreRunner::live();
+    crate::app::adapters::stores::with_refused_hubs_launches_for_test(|| {
+        controlled_discovery(&mut io, &mut runner, &mut stores);
+    });
+    assert_eq!(io.requests.len(), 1);
+    assert_eq!(io.requests[0]["admitted"], serde_json::json!(false), "real refusal must be recorded");
+    plx_plex::plex::reset_servers_for_test();
+}
+
+#[test]
+fn controlled_admission_records_real_hubs_spawn_refusal() {
+    let _serial = plx_base::testlock::serial();
+    plx_plex::plex::reset_servers_for_test();
+    let mut hubs = plx_data::stores::hubs::HubsStore::default();
+    assert!(hubs.run(plx_data::stores::hubs::HubsCmd::Reset).changed);
+    let sid = plx_plex::plex::register_for_test("s00000001", "127.0.0.1", 9, "s00000002", "s00000003");
+    assert!(plx_plex::plex::set_current(sid));
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let publisher = plx_plex::plex::session::ProfilePublisher::scoped(&mt);
+    let mut io = HomeIo { replay:false,preferences:Default::default(),requests:Vec::new(),admissions:Default::default(),
+        failure:None,profile:publisher.snapshot() };
+    let mut runner = StoreRunner::live();
+    assert!(crate::app::adapters::stores::with_refused_hubs_launches_for_test(|| controlled_hubs(
+        &mut io, &mut runner, &mut hubs, Some(plx_data::stores::hubs::HubsCmd::RefetchHubs), 0.0)).changed);
+    assert_eq!(io.requests.len(), 1);
+    assert_eq!(io.requests[0]["admitted"], serde_json::json!(false), "real refusal must be recorded");
+    assert!(!hubs.owed(), "a launch the system refused holds no claim");
+    assert!(!hubs.source_settled(sid), "the refused read stays out until the next step settles it");
+    let next = controlled_hubs(&mut io, &mut runner, &mut hubs, None, 0.0);
+    assert_eq!(next.endpoints.iter().map(|r| r.sid).collect::<Vec<_>>(), [sid],
+        "the next step finds the refusal and asks for the endpoint again");
+    assert!(hubs.source_settled(sid));
+    assert_eq!(io.requests.len(), 1, "settling a refusal asks nothing new");
+    plx_plex::plex::reset_servers_for_test();
+}
+
+#[test]
+fn controlled_hubs_replays_refusal_retry_and_success() {
+    let _serial = plx_base::testlock::serial();
+    plx_plex::plex::reset_servers_for_test();
+    let sid = plx_plex::plex::register_for_test("s00000001", "127.0.0.1", 9, "s00000002", "s00000003");
+    assert!(plx_plex::plex::set_current(sid));
+    let client = plx_plex::plex::client_for(sid).unwrap();
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let initial = plx_data::pms::initial::Initial::fresh();
+    let mut transcript: Vec<Vec<serde_json::Value>> = Vec::new();
+    let mut states = Vec::new();
+    let mut completion = None;
+    let mut parsed: Option<plx_ui::rec::Recording> = None;
+    for replay in [false, true] {
+        let (state, adapter) = initial.restore(&mt).unwrap();
+        let mut hubs = plx_data::stores::hubs::HubsStore::from_parts(state, adapter, &Default::default());
+        let publisher = plx_plex::plex::session::ProfilePublisher::scoped(&mt);
+        let mut io = HomeIo { replay,preferences:Default::default(),requests:Vec::new(),
+            admissions:Default::default(),failure:None,profile:publisher.snapshot() };
+        // The runner parks every Hubs job it launches, so the test reads the request and fabricates
+        // its answer; the first launch is refused by the system instead.
+        let mut runner = StoreRunner::held_all();
+        let mut launches = 0;
+        let sink = plx_ui::rec::MemSink::default();
+        let bytes = sink.segments.clone();
+        let header = plx_ui::rec::Header::new(17,&plx_ui::dispatch::press::Press::new());
+        let mut writer = plx_ui::rec::Writer::open(Box::new(sink),&header,0).unwrap();
+        for frame in 0..160 {
+            if replay {
+                io.admissions = parsed.as_ref().unwrap().frames[frame].effects.iter()
+                    .map(|effect| effect["payload"].clone()).collect();
+            }
+            let command = (frame == 0).then_some(plx_data::stores::hubs::HubsCmd::RefetchHubs);
+            let outcome = if frame == 0 && !replay {
+                crate::app::adapters::stores::with_refused_hubs_launches_for_test(||
+                    controlled_hubs(&mut io, &mut runner, &mut hubs, command, 0.05))
+            } else {
+                controlled_hubs(&mut io, &mut runner, &mut hubs, command, 0.05)
+            };
+            for job in runner.take_held() {
+                assert!(!replay, "no live executor during replay");
+                let plx_data::stores::StoreJob::Hubs(job, _) = job else { panic!("another store's job on the Hubs outbox") };
+                launches += 1;
+                let (epoch,req,sid,instance,token_gen) = job.req.descriptor();
+                completion = Some((frame,serde_json::json!({"kind":"hubs","version":1,
+                    "gen":epoch,"seq":req,"sid":sid,"client":instance,"token_gen":token_gen,
+                    "build":{"cw":[],"shelves":[]}})));
+            }
+            if let Some((at,wire)) = &completion {
+                if *at == frame {
+                    let result = plx_data::pms::record::decode(wire.clone(), |id|
+                        (id == client.instance_gen()).then_some(client)).unwrap();
+                    let adapter = hubs.adapter();
+                    assert!(plx_data::pms::land(hubs.state_mut(), &adapter, &result).endpoints.iter().next().is_none());
+                }
+            }
+            let adapter = hubs.adapter_for_test();
+            let state = serde_json::to_value(plx_data::pms::initial::Initial::capture(hubs.state(), &adapter)).unwrap();
+            assert!(io.failure.is_none() && io.admissions.is_empty());
+            let requests = std::mem::take(&mut io.requests);
+            if replay {
+                assert_eq!(requests,transcript[frame]);
+                assert!(state == states[frame], "real Home retry and result state diverged at {frame}");
+            } else {
+                writer.tick(frame as u64,plx_machine::machine::Tick {ms:frame as u32 * 50,dt_us:50_000});
+                for request in &requests { writer.effect_payload(frame as u64,"Cache","Request",request.clone()); }
+                writer.flush_frame().unwrap();
+                transcript.push(requests); states.push(state);
+            }
+            // the refusal recorded at frame 0 is settled by the next step, not by the kick
+            assert_eq!(outcome.endpoints.iter().count(), usize::from(frame == 1));
+        }
+        assert_eq!(launches,if replay {0} else {1}, "the first launch was refused; replay launches nothing");
+        assert!(completion.is_some(),"backoff must recover with an admitted result");
+        writer.finish().unwrap();
+        if !replay {
+            let bytes = bytes.borrow();
+            parsed = Some(plx_ui::rec::Recording::parse(&header.to_json().to_string(),
+                &bytes.iter().map(Vec::as_slice).collect::<Vec<_>>(),17).unwrap());
+        }
+    }
+    assert_eq!(transcript[0][0]["admitted"],serde_json::json!(false));
+    assert_eq!(transcript.iter().flatten().filter(|r| r["admitted"] == true).count(),1);
+    plx_plex::plex::reset_servers_for_test();
+}
+
+/// Section/page/directory discovery's refusal -> backoff -> retry -> success, recorded through the real
+/// `ui::rec` writer and replayed from the parsed recording. It lives here, not in `browse`, because it
+/// drives `HomeIo` and the recording format: the data layer's own tests name neither.
+#[test]
+fn controlled_discovery_replays_refusal_retry_and_success_with_exact_identity() {
+    let _serial = plx_base::testlock::serial();
+    // The one registered, current source the discovery runs against. This is the fixture
+    // `browse`'s own tests call `registered_source` (private to that module), minus its table.
+    struct ResetServers;
+    impl Drop for ResetServers {
+        fn drop(&mut self) { plx_plex::plex::reset_servers_for_test(); }
+    }
+    plx_plex::plex::reset_servers_for_test();
+    let sid = plx_plex::plex::register_for_test("browse-life", "10.0.0.1", 32400, "old", "cid");
+    assert!(plx_plex::plex::set_current(sid));
+    let _cleanup = ResetServers;
+    let client = plx_plex::plex::client_for(sid).unwrap();
+    let mut stores = plx_data::stores::Stores::default();
+    // Two independent executions start from this pre-request store value (the epoch a freshly
+    // reset table starts from). No worker is running: the test runner parks the one admitted launch
+    // and the OS refusing the first thread is substituted, below the real discovery policy.
+    let initial_epoch = stores.browse.borrow().table_epoch_for_test().wrapping_add(1);
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let mut transcript: Vec<std::collections::VecDeque<serde_json::Value>> = Vec::new();
+    let mut states = Vec::new();
+    let mut successful_result = None;
+    let mut parsed: Option<plx_ui::rec::Recording> = None;
+    for replay in [false, true] {
+        // seed_sources is a reset fixture; restore the same pre-execution epoch on each
+        // independent run, never to cancel or bypass a guard during either history.
+        let mut keys = plx_plex::plex::ClientKeys::default();
+        crate::app::adapters::stores::refill_client_keys(&mut keys);
+        stores.browse.borrow().observe_pin_write();
+        let session = plx_plex::plex::session::peek();
+        let visible_generation = plx_plex::plex::session::visible_generation();
+        let settled = plx_plex::plex::session::peek_settled().is_some();
+        let profile_key = plx_plex::plex::session::current_profile_key();
+        let input = plx_data::browse::BrowseRosterInput { tenure: 0,
+            keys: &keys, session: &session, visible_generation, settled, profile_key: &profile_key,
+        };
+        stores.browse.borrow_mut().prepare_discovery_replay_for_test(
+            sid, initial_epoch, &input,
+        );
+        let publisher = plx_plex::plex::session::ProfilePublisher::scoped(&mt);
+        let mut io = HomeIo {
+            replay,
+            preferences: Default::default(),
+            requests: Vec::new(),
+            admissions: Default::default(),
+            failure: None,
+            profile: publisher.snapshot(),
+        };
+        let mut runner = StoreRunner::held_all();
+        let mut parked = 0;
+        let sink = plx_ui::rec::MemSink::default();
+        let bytes = sink.segments.clone();
+        let header = plx_ui::rec::Header::new(17, &plx_ui::dispatch::press::Press::new());
+        let mut writer = plx_ui::rec::Writer::open(Box::new(sink), &header, 0).unwrap();
+        for frame in 0..=602 {
+            if replay {
+                io.admissions = parsed.as_ref().unwrap().frames[frame]
+                    .effects
+                    .iter()
+                    .map(|effect| effect["payload"].clone())
+                    .collect();
+            }
+            if frame == 0 {
+                // the system refuses the first launch: the recorded answer is `admitted:false`
+                crate::app::adapters::stores::with_refused_hubs_launches_for_test(|| {
+                    controlled_discovery(&mut io, &mut runner, &mut stores);
+                });
+            } else {
+                controlled_discovery(&mut io, &mut runner, &mut stores);
+            }
+            for job in runner.take_held() {
+                assert!(!replay, "replay must never execute live admission");
+                let plx_data::stores::StoreJob::BrowseDiscovery(job, _port) = job
+                    else { panic!("only the discovery read is parked") };
+                parked += 1;
+                let descriptor = job.req.admission();
+                successful_result = Some(serde_json::json!({"kind":"discovery","version":1,
+                    "epoch":descriptor["epoch"],"source":descriptor["source"],"sid":descriptor["sid"],
+                    "client":descriptor["client"],"token_gen":descriptor["token_gen"],
+                    "name":"s00000001","what":{"Sections":[]}}));
+            }
+            if frame == 600 {
+                let result =
+                    plx_data::browse::record::decode(successful_result.clone().expect("retry admitted"), |id| {
+                        (id == client.instance_gen()).then_some(client)
+                    })
+                    .unwrap();
+                assert!(stores.browse.borrow_mut()
+                    .apply_discovery(&result, &io.preferences)
+                    .endpoints
+                    .iter()
+                    .next()
+                    .is_none());
+            }
+            let requests: std::collections::VecDeque<_> =
+                std::mem::take(&mut io.requests).into();
+            let state = stores.browse.borrow().discovery_policy_for_test();
+            assert!(
+                io.failure.is_none() && io.admissions.is_empty(),
+                "frame={frame} replay={replay} failure={:?} pending={}",
+                io.failure,
+                io.admissions.len()
+            );
+            if replay {
+                assert_eq!(
+                    requests, transcript[frame],
+                    "request/answer identity and frame must match"
+                );
+                assert_eq!(
+                    state, states[frame],
+                    "refusal/retry policy must match normal execution"
+                );
+            } else {
+                writer.tick(
+                    frame as u64,
+                    plx_machine::machine::Tick {
+                        ms: frame as u32 * 16,
+                        dt_us: 16_000,
+                    },
+                );
+                for request in &requests {
+                    writer.effect_payload(frame as u64, "Cache", "Request", request.clone());
+                }
+                writer.flush_frame().unwrap();
+                transcript.push(requests);
+                states.push(state);
+            }
+        }
+        assert!(
+            stores.browse.borrow().discovery_policy_for_test().2,
+            "admitted retry delivers its real result"
+        );
+        assert_eq!(parked, if replay { 0 } else { 1 }, "one admitted launch is parked, and none in replay");
+        writer.finish().unwrap();
+        if !replay {
+            let bytes = bytes.borrow();
+            parsed = Some(
+                plx_ui::rec::Recording::parse(
+                    &header.to_json().to_string(),
+                    &bytes.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    17,
+                )
+                .unwrap(),
+            );
+        }
+    }
+    assert_eq!(transcript[0][0]["admitted"], serde_json::json!(false));
+    assert!(transcript[1..600]
+        .iter()
+        .all(std::collections::VecDeque::is_empty));
+    assert_eq!(transcript[600][0]["admitted"], serde_json::json!(true));
+}
+#[test]
+fn admission_replay_requires_full_request_identity_and_boolean_outcome() {
+    let _serial = plx_base::testlock::serial();
+    let mt = unsafe { plx_base::task::MainThread::assume() };
+    let publisher = plx_plex::plex::session::ProfilePublisher::scoped(&mt);
+    let request = serde_json::json!({"kind":"hubs","epoch":u32::MAX,"req":u32::MAX,
+        "sid":0,"client":u32::MAX,"token_gen":u32::MAX});
+    let mut recorded = request.clone(); recorded["admitted"] = serde_json::json!(false);
+    validate_admission(&recorded,u32::MAX).unwrap();
+    for field in ["epoch","req","sid","client","token_gen","admitted"] {
+        let mut wrong = recorded.clone(); wrong[field] = serde_json::json!(u64::from(u32::MAX)+1);
+        assert!(validate_admission(&wrong,u32::MAX).is_err());
+        let mut io = HomeIo { replay:true,preferences:Default::default(),requests:Vec::new(),
+            admissions:vec![wrong].into(),failure:None,profile:publisher.snapshot() };
+        assert!(!io.admit(request.clone(),||panic!("replay must not execute resource")));
+        assert!(io.failure.is_some());
+    }
+    let mut io = HomeIo { replay:true,preferences:Default::default(),requests:Vec::new(),
+        admissions:vec![recorded.clone()].into(),failure:None,profile:publisher.snapshot() };
+    assert!(!io.admit(request,||panic!("recorded refusal is not a live execution")));
+    assert!(io.failure.is_none());
+    assert_eq!(io.requests,vec![recorded]);
+}
