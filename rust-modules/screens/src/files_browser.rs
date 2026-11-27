@@ -178,7 +178,7 @@ impl FilesBrowserScreen {
         if self.loading {
             TextView::new("Loading…", theme::size::BODY, theme::TEXT_SECONDARY).draw(painter, Rect::new(content.x + 36.0, content.y + 170.0, content.w - 72.0, 44.0));
         } else if let Some(error) = &self.error {
-            TextView::new(error, theme::size::CAPTION, theme::STATUS_ERROR).draw(painter, Rect::new(content.x + 36.0, content.y + 170.0, content.w - 72.0, 64.0));
+            TextView::new(error, theme::size::CAPTION, theme::DANGER).draw(painter, Rect::new(content.x + 36.0, content.y + 170.0, content.w - 72.0, 64.0));
         } else {
             let rows = self.visible_entries();
             let row_h = if self.mode == BrowserMode::List { 58.0 } else { 76.0 };
