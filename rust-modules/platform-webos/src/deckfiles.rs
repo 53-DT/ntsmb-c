@@ -17,6 +17,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 extern "C" { fn glViewport(x: i32, y: i32, width: i32, height: i32); }
 
 enum WorkerEvent {
+    Shares(Result<Vec<String>, String>),
     Connected(Result<String, String>),
     Directory { source_id: String, path: String, result: Result<Vec<FileItem>, String> },
     Prepared(Result<PreparedSourcePlay, String>),
@@ -25,6 +26,14 @@ enum WorkerEvent {
 fn spawn_action(action: DeckFilesAction, data_dir: PathBuf, tx: &Sender<WorkerEvent>) -> Result<(), String> {
     match action {
         DeckFilesAction::None | DeckFilesAction::SaveSettings => Ok(()),
+        DeckFilesAction::DiscoverShares(payload) => {
+            let tx=tx.clone();
+            std::thread::Builder::new().name("deckfiles-smb-shares".into()).spawn(move || {
+                let result=plx_smb::provider::discover_smb_shares(&payload);
+                let _=tx.send(WorkerEvent::Shares(result));
+            }).map_err(|error|format!("Could not start SMB share discovery: {error}"))?;
+            Ok(())
+        }
         DeckFilesAction::Connect(payload) => {
             let tx = tx.clone();
             std::thread::Builder::new().name("deckfiles-smb-connect".into()).spawn(move || {
@@ -68,6 +77,9 @@ fn dispatch(app: &mut DeckFilesApp, action: DeckFilesAction, data_dir: &PathBuf,
     match action {
         DeckFilesAction::SaveSettings => if let Err(error) = app.save_settings() { show_error(app, error); },
         DeckFilesAction::None => {},
+        DeckFilesAction::DiscoverShares(_) if app.add_source.state == deckfiles_screens::add_source_modal::ConnectState::Connecting => {
+            if let Err(error)=spawn_action(action,data_dir.clone(),tx) { app.finish_discover_shares(Err(error)); }
+        }
         DeckFilesAction::Connect(_) if app.add_source.state == deckfiles_screens::add_source_modal::ConnectState::Connecting => {
             if let Err(error) = spawn_action(action, data_dir.clone(), tx) { app.finish_connect(Err(error)); }
         }
@@ -142,6 +154,7 @@ fn consume_worker_events(
 ) {
     while let Ok(event) = rx.try_recv() {
         match event {
+            WorkerEvent::Shares(result) => app.finish_discover_shares(result),
             WorkerEvent::Connected(Ok(source_id)) => {
                 app.finish_connect(Ok(source_id.clone()));
                 match app.reload_vault(data_dir) {
