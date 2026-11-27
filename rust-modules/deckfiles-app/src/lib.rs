@@ -110,6 +110,7 @@ impl DeckFilesApp {
             }
         }).collect());
         self.settings.credentials = credential_items(&self.vault);
+        self.remote.reconcile_sidebar(3 + self.files.sources.len());
     }
 
     /// Connect and persist a source. Call from an I/O worker: SMB authentication is blocking.
@@ -167,8 +168,8 @@ impl DeckFilesApp {
         use deckfiles_screens::add_source_modal::SourceProviderChoice;
         match input {
             DeckFilesInput::OpenFiles => { self.page = DeckFilesPage::Files; self.remote.focus_content(); },
-            DeckFilesInput::OpenAddSource => { self.add_source.cancel(); self.page = DeckFilesPage::AddSource; }
-            DeckFilesInput::OpenSettings => { self.reload_settings(); self.page = DeckFilesPage::Settings; }
+            DeckFilesInput::OpenAddSource => { self.add_source.cancel(); self.page = DeckFilesPage::AddSource; self.add_source.focused_field=0; },
+            DeckFilesInput::OpenSettings => { self.reload_settings(); self.page = DeckFilesPage::Settings; },
             DeckFilesInput::CycleSource(delta) if self.page == DeckFilesPage::Files => {
                 let available = self.files.sources.iter().filter(|source| source.available).collect::<Vec<_>>();
                 if !available.is_empty() {
@@ -219,7 +220,7 @@ impl DeckFilesApp {
             }
             DeckFilesInput::ToggleGuest if self.page == DeckFilesPage::AddSource => {
                 self.add_source.draft.guest = !self.add_source.draft.guest;
-                if self.add_source.draft.guest { self.add_source.draft.password.clear(); }
+                if self.add_source.draft.guest { self.add_source.draft.password.clear(); self.add_source.draft.save_password=false; }
                 self.add_source.error = None;
                 self.add_source.focused_field = self.add_source.focused_field.min(self.add_source.field_count().saturating_sub(1));
             }
