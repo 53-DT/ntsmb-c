@@ -224,7 +224,7 @@ impl DeckFilesApp {
                     },
                     SourceProviderChoice::GoogleDrive => None,
                 };
-                if let Some(target) = target { target.push_str(&value); }
+                if let Some(target) = target { if !(self.add_source.draft.provider == SourceProviderChoice::Smb && self.add_source.draft.guest && field == 5) { target.push_str(&value); } }
                 if self.add_source.draft.provider == SourceProviderChoice::Smb && field == 2 {
                     let mut port = self.add_source.draft.port.to_string(); port.push_str(&value);
                     if let Ok(parsed) = port.parse::<u16>() { self.add_source.draft.port = parsed; }
@@ -250,7 +250,7 @@ impl DeckFilesApp {
                     },
                     SourceProviderChoice::GoogleDrive => None,
                 };
-                if let Some(target) = target { target.pop(); }
+                if let Some(target) = target { if !(self.add_source.draft.provider == SourceProviderChoice::Smb && self.add_source.draft.guest && field == 5) { target.pop(); } }
             }
             DeckFilesInput::Confirm => match self.page {
                 DeckFilesPage::Files => if let Some(entry) = self.files.selected_entry().cloned() {
@@ -267,9 +267,9 @@ impl DeckFilesApp {
                 },
                 DeckFilesPage::AddSource => {
                     match self.add_source.focused_field {
-                        6 => { self.add_source.draft.guest = !self.add_source.draft.guest; if self.add_source.draft.guest { self.add_source.draft.password.clear(); self.add_source.draft.save_password=false; } self.add_source.error=None; },
-                        7 => { if !self.add_source.draft.guest { self.add_source.draft.save_password = !self.add_source.draft.save_password; } },
-                        8 => if let Ok(draft) = self.add_source.begin_connect() {
+                        6 if self.add_source.draft.provider == SourceProviderChoice::Smb => { self.add_source.draft.guest = !self.add_source.draft.guest; if self.add_source.draft.guest { self.add_source.draft.password.clear(); self.add_source.draft.save_password=false; } self.add_source.error=None; },
+                        7 if self.add_source.draft.provider == SourceProviderChoice::Smb => { if !self.add_source.draft.guest { self.add_source.draft.save_password = !self.add_source.draft.save_password; } },
+                        index if index == self.add_source.field_count().saturating_sub(1) => if let Ok(draft) = self.add_source.begin_connect() {
                     let kind = match draft.provider {
                         SourceProviderChoice::Smb => SourceKind::Smb,
                         SourceProviderChoice::Local => SourceKind::Local,
