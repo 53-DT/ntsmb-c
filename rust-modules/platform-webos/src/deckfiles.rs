@@ -6,7 +6,6 @@
 use deckfiles_app::{DeckFilesAction, DeckFilesApp, DeckFilesInput, DeckFilesPage};
 use deckfiles_screens::{deck_player::PlayerSnapshot, files_browser::FileItem};
 use plx_media::player::{self, adapter::PlayerAdapter, machine::Player};
-use plx_os::storage::deck_vault::DeckVault;
 use plx_smb::provider::PreparedSourcePlay;
 use plx_ui::{Painter, Rect};
 use plxnative_modules::host::{self, Exit, MainThread, OpenAsk, Release, Shell, Surface};
@@ -231,7 +230,7 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
     if let Err(exit) = shell.init(&mt) { return exit; }
     let plan = shell.window(None);
     let ask = OpenAsk { title: plan.title, placement: plan.placement, high_dpi: true };
-    let mut surface = match shell.open(&mt, &ask) { Ok(surface) => surface, Err(exit) => return exit };
+    let surface = match shell.open(&mt, &ask) { Ok(surface) => surface, Err(exit) => return exit };
     let window = surface.window();
     shell.bind_window(window);
     shell.grab_surface(window);
@@ -243,7 +242,10 @@ pub(crate) fn run(shell: &dyn Shell) -> Exit {
         plx_base::eventlog::log(&format!("DeckFiles: graphics initialization failed: {error:?}"));
         return Exit::refused(1);
     }
-    plx_gfx::text::init_text();
+    if let Err(error) = plx_gfx::text::init_text() {
+        plx_base::eventlog::log(&format!("DeckFiles: text initialization failed: {error:?}"));
+        return Exit::refused(1);
+    }
     if let Err(error) = plx_gfx::gfx::init_image() {
         plx_base::eventlog::log(&format!("DeckFiles: image initialization failed: {error:?}"));
         return Exit::refused(1);
