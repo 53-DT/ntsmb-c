@@ -1,4 +1,4 @@
-Package: io.github.tiper.finnative
+Package: io.github.davetrump53ai.deckfiles
 Version: 0.2.0
 Section: misc
 Priority: optional
@@ -7,6 +7,6 @@ Installed-Size: 10117
 Maintainer: NT-SMB Project <nt-smb@users.noreply.github.com>
 Homepage: https://github.com/davetrump53-ai/ntsmb
 License: GPL-3.0-or-later
-Description: NT-SMB — native SMB file browser and video player for LG webOS TVs
+Description: DeckFiles — native file browser and video player for LG webOS TVs
 webOS-Package-Format-Version: 2
 webOS-Packager-Version: plxnative-mkipk/1
