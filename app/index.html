@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#09090b"><title>DeckFiles</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app" class="shell">
+  <aside class="sidebar">
+    <div class="side-top">
+      <div class="side-heading"><h1>Files</h1><button class="icon-btn" aria-label="Settings" data-focus><svg viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.4 15 .1.1 1.4 1.1-1.5 2.6-1.7-.7a8 8 0 0 1-1.5.9l-.3 1.8h-3l-.3-1.8a8 8 0 0 1-1.5-.9l-1.7.7-1.5-2.6 1.4-1.1a7 7 0 0 1 0-1.8l-1.4-1.1 1.5-2.6 1.7.7a8 8 0 0 1 1.5-.9l.3-1.8h3l.3 1.8a8 8 0 0 1 1.5.9l1.7-.7 1.5 2.6-1.4 1.1a7 7 0 0 1 0 1.7Z"/></svg></button></div>
+      <div class="sources-label"><span>Sources</span><button id="add-source" class="icon-btn plus" aria-label="Add source" data-focus><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>
+      <button class="source active" data-focus><svg class="source-icon" viewBox="0 0 24 24"><path d="M4 8h16l2 11H2L4 8Z"/><path d="M7 8 9 4h6l2 4M9 13h6"/></svg><span>Local Media</span></button>
+    </div>
+    <div class="side-footer">Hold source or press Delete to remove</div>
+  </aside>
+  <main class="main">
+    <header class="toolbar">
+      <div class="toolbar-left">
+        <div class="history"><button class="icon-btn" aria-label="Back" data-focus><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button><button class="icon-btn" aria-label="Forward" data-focus><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button></div>
+        <h2 id="folder-title">Local Media</h2>
+      </div>
+      <div class="toolbar-actions">
+        <button id="select-mode" class="pill" data-focus>Select</button>
+        <div class="view-toggle"><button id="grid-view" class="view-btn chosen" aria-label="Grid view" data-focus><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button><button id="list-view" class="view-btn" aria-label="List view" data-focus><svg viewBox="0 0 24 24"><path d="M9 5h12M9 12h12M9 19h12M3 5h.01M3 12h.01M3 19h.01"/></svg></button></div>
+        <button id="search-toggle" class="round-btn" aria-label="Search" data-focus><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg></button>
+      </div>
+    </header>
+    <div id="search-row" class="search-row hidden"><input id="search" placeholder="Filter folders…" aria-label="Filter folders"><button id="clear-search" class="text-btn" data-focus>Clear</button></div>
+    <section id="folder-grid" class="folder-grid" aria-label="Local Media folders">
+      <button class="folder-card focused" data-focus><span class="folder-art"><svg viewBox="0 0 80 64"><path d="M5 13a8 8 0 0 1 8-8h17l9 9h28a8 8 0 0 1 8 8v29a8 8 0 0 1-8 8H13a8 8 0 0 1-8-8V13Z" fill="#269bdc"/><path d="M5 25a8 8 0 0 1 8-8h54a8 8 0 0 1 8 8v26a8 8 0 0 1-8 8H13a8 8 0 0 1-8-8V25Z" fill="#48b5ed"/></svg></span><span>Documentaries</span></button>
+      <button class="folder-card" data-focus><span class="folder-art"><svg viewBox="0 0 80 64"><path d="M5 13a8 8 0 0 1 8-8h17l9 9h28a8 8 0 0 1 8 8v29a8 8 0 0 1-8 8H13a8 8 0 0 1-8-8V13Z" fill="#269bdc"/><path d="M5 25a8 8 0 0 1 8-8h54a8 8 0 0 1 8 8v26a8 8 0 0 1-8 8H13a8 8 0 0 1-8-8V25Z" fill="#48b5ed"/></svg></span><span>Movies</span></button>
+      <button class="folder-card" data-focus><span class="folder-art"><svg viewBox="0 0 80 64"><path d="M5 13a8 8 0 0 1 8-8h17l9 9h28a8 8 0 0 1 8 8v29a8 8 0 0 1-8 8H13a8 8 0 0 1-8-8V13Z" fill="#269bdc"/><path d="M5 25a8 8 0 0 1 8-8h54a8 8 0 0 1 8 8v26a8 8 0 0 1-8 8H13a8 8 0 0 1-8-8V25Z" fill="#48b5ed"/></svg></span><span>Series</span></button>
+      <button class="folder-card" data-focus><span class="folder-art"><svg viewBox="0 0 80 64"><path d="M5 13a8 8 0 0 1 8-8h17l9 9h28a8 8 0 0 1 8 8v29a8 8 0 0 1-8 8H13a8 8 0 0 1-8-8V13Z" fill="#269bdc"/><path d="M5 25a8 8 0 0 1 8-8h54a8 8 0 0 1 8 8v26a8 8 0 0 1-8 8H13a8 8 0 0 1-8-8V25Z" fill="#48b5ed"/></svg></span><span>TV Recovery Tests</span></button>
+    </section>
+  </main>
+</div>
+<div id="modal-backdrop" class="backdrop hidden">
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <header class="modal-head"><div><h2 id="modal-title">Add Media Source</h2><p>Credentials are sealed locally in the Storage module.</p></div><button id="close-modal" class="icon-btn close" aria-label="Close" data-focus><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header>
+    <div class="modal-body">
+      <div class="module-tabs">
+        <button class="module-tab selected" data-kind="smb" data-focus><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1"/><path d="M8 6.5h.01M8 17.5h.01"/></svg><span><b>SMB Share</b><small>Ready</small></span></button>
+        <button class="module-tab" data-kind="local" data-focus><svg viewBox="0 0 24 24"><path d="M4 8h16l2 11H2L4 8Z"/><path d="M7 8 9 4h6l2 4M9 13h6"/></svg><span><b>Local Media</b><small>Ready</small></span></button>
+        <button class="module-tab" data-kind="gdrive" data-focus><svg viewBox="0 0 24 24"><path d="m8 3-6 11 4 7h12l4-7-6-11H8Z"/><path d="M8 3 14 14M2 14h20"/></svg><span><b>Google Drive</b><small>Module slot</small></span></button>
+      </div>
+      <form id="source-form" autocomplete="off">
+        <div id="smb-fields">
+          <div class="field-grid host-grid"><label>Server IP or Hostname<input id="host" placeholder="192.168.29.131" data-focus></label><label>Port<input id="port" value="445" inputmode="numeric" data-focus></label></div>
+          <div class="field-grid"><label>Share Name<input id="share" placeholder="Movies" data-focus></label><label>Sidebar Label (Optional)<input id="label" placeholder="192.168.29.131" data-focus></label></div>
+          <button type="button" id="guest-row" class="guest-row" data-focus><span><b>Guest Access</b><small>Connect without a username or password</small></span><span id="guest-switch" class="switch"><i></i></span></button>
+          <div id="credentials" class="field-grid"><label>Username<input id="username" placeholder="media" data-focus></label><label>Password<input id="password" type="password" placeholder="••••••••" data-focus></label></div>
+          <label id="vault-row" class="vault-row"><input type="checkbox" id="vault" checked><span class="lock">♙</span><span>Seal password in encrypted Storage vault</span></label>
+        </div>
+        <div id="local-fields" class="module-message hidden"><b>Local Media</b><p>Browse media available to the TV and rename this source in the sidebar.</p><label>Display Name<input placeholder="Local Media" data-focus></label></div>
+        <div id="gdrive-fields" class="module-message hidden"><b>Google Drive Module Slot</b><p>This source module is a visual placeholder in this UI-only build.</p></div>
+        <footer class="modal-actions"><button type="button" id="cancel-modal" class="cancel" data-focus>Cancel</button><button type="submit" class="connect" data-focus>Connect Source</button></footer>
+      </form>
+    </div>
+  </section>
+</div>
+<script src="app.js"></script>
+</body></html>

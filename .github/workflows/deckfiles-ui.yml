@@ -1,0 +1,33 @@
+name: DeckFiles UI IPK
+
+on:
+  push:
+    branches: [deckfiles-standalone]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install webOS CLI
+        run: npm install --global @webosose/ares-cli
+      - name: Package DeckFiles
+        run: |
+          mkdir -p dist
+          ares-package app -o dist
+          ls -lh dist/*.ipk
+      - name: Upload IPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: deckfiles-ui-0.1.0-ipk
+          path: dist/*.ipk
+          if-no-files-found: error

@@ -1,0 +1,13 @@
+{
+  "id": "io.github.53dt.deckfiles",
+  "version": "0.1.0",
+  "vendor": "53-DT",
+  "type": "web",
+  "main": "index.html",
+  "title": "DeckFiles",
+  "appDescription": "A simple TV media file browser.",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "iconColor": "#08080a",
+  "requiredMemory": 64
+}
