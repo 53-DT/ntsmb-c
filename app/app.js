@@ -1,14 +1,14 @@
 (() => {
  const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
  const backdrop=$('#modal-backdrop'), modal=$('.modal');
- let previousFocus=null,guest=false,kind='smb';
+ let previousFocus=null,guest=false,kind='smb',currentView='grid';
  const visible=e=>!!(e&&e.getClientRects().length&&!e.closest('.hidden')&&!e.disabled);
  const focusables=()=>{
   const scope=backdrop.classList.contains('hidden')?document:modal;
   return Array.from(scope.querySelectorAll('button,input,[data-focus]')).filter(visible);
  };
  function setFocus(el){if(el&&typeof el.focus==='function'){el.focus();if(el.scrollIntoView)el.scrollIntoView({block:'nearest',inline:'nearest'});}}
- function openModal(){previousFocus=document.activeElement;backdrop.classList.remove('hidden');setKind('smb');setFocus($('.module-tab'));}
+ function openModal(){previousFocus=document.activeElement;backdrop.classList.remove('hidden');modal.scrollTop=0;setKind('smb');setFocus($('.module-tab'));}
  function closeModal(){backdrop.classList.add('hidden');setFocus(previousFocus);}
  function setKind(next){kind=next;$$('.module-tab').forEach(b=>b.classList.toggle('selected',b.dataset.kind===kind));$('#smb-fields').classList.toggle('hidden',kind!=='smb');$('#local-fields').classList.toggle('hidden',kind!=='local');$('#gdrive-fields').classList.toggle('hidden',kind!=='gdrive');}
  $('#add-source').addEventListener('click',openModal);$('#close-modal').addEventListener('click',closeModal);$('#cancel-modal').addEventListener('click',closeModal);
@@ -17,7 +17,7 @@
  $('#source-form').addEventListener('submit',e=>{e.preventDefault();closeModal();});
  $('#select-mode').addEventListener('click',e=>{e.currentTarget.textContent=e.currentTarget.textContent==='Select'?'Done':'Select';});
  $('#grid-view').addEventListener('click',()=>setView('grid'));$('#list-view').addEventListener('click',()=>setView('list'));
- function setView(v){$('#folder-grid').classList.toggle('list',v==='list');$('#grid-view').classList.toggle('chosen',v==='grid');$('#list-view').classList.toggle('chosen',v==='list');}
+ function setView(v){currentView=v;$('#folder-grid').classList.toggle('list',v==='list');$('#grid-view').classList.toggle('chosen',v==='grid');$('#list-view').classList.toggle('chosen',v==='list');try{localStorage.setItem('deckfiles-folder-view',v);}catch(_){} }
  $('#search-toggle').addEventListener('click',()=>{const row=$('#search-row');row.classList.toggle('hidden');if(!row.classList.contains('hidden'))setFocus($('#search'));});
  $('#clear-search').addEventListener('click',()=>{$('#search').value='';filter();setFocus($('#search'));});
  $('#search').addEventListener('input',filter);
