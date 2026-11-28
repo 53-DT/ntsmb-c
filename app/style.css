@@ -85,3 +85,45 @@ button:focus,input:focus{outline:none!important;box-shadow:none!important}
 .search-box.open input:focus{border-color:#55555e}
 @media(max-width:850px){.toolbar{padding-left:18px;padding-right:18px;gap:10px}.toolbar-actions{gap:10px}.search-box.open{width:220px;max-width:220px;flex-basis:220px}#folder-grid:not(.list){padding:20px 18px!important;gap:14px!important}}
 @media(max-width:650px){.toolbar{padding-left:12px;padding-right:12px}.search-box.open{width:150px;max-width:150px;flex-basis:150px}.toolbar-actions{gap:7px}.pill{padding:0 12px}}
+
+
+/* Revision 5: exact thumbnail-cell geometry and aligned D-pad focus grid. */
+#folder-grid:not(.list){
+ display:grid!important;
+ grid-template-columns:repeat(auto-fill,176px)!important;
+ grid-auto-rows:174px!important;
+ grid-auto-flow:row!important;
+ justify-content:start!important;
+ align-content:start!important;
+ align-items:stretch!important;
+ justify-items:stretch!important;
+ gap:18px 20px!important;
+ padding:28px 34px!important;
+}
+#folder-grid:not(.list) .folder-card{
+ box-sizing:border-box!important;
+ display:flex!important;
+ width:176px!important;min-width:176px!important;max-width:176px!important;
+ height:174px!important;min-height:174px!important;max-height:174px!important;
+ margin:0!important;padding:14px 10px 12px!important;
+ flex:none!important;
+ align-self:stretch!important;justify-self:stretch!important;
+ align-items:center!important;justify-content:flex-start!important;
+ flex-direction:column!important;gap:10px!important;
+ border:1px solid transparent!important;border-radius:18px!important;
+ text-align:center!important;background:transparent!important;
+}
+#folder-grid:not(.list) .folder-art{
+ width:108px!important;height:88px!important;flex:0 0 88px!important;
+ display:grid!important;place-items:center!important;margin:0 auto!important;
+}
+#folder-grid:not(.list) .folder-art svg{width:100px!important;height:80px!important;display:block!important}
+#folder-grid:not(.list) .folder-card:focus{
+ background:#19191e!important;border:1px solid #41414a!important;
+ outline:none!important;box-shadow:none!important;
+}
+.toolbar .history,.toolbar .pill,.toolbar .view-toggle,.toolbar .round-btn{flex-shrink:0}
+.toolbar .toolbar-actions{gap:20px}
+.toolbar .pill{margin-right:4px}
+.toolbar .view-toggle{margin-left:2px;margin-right:2px}
+.toolbar .round-btn{margin-left:2px}
