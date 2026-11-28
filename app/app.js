@@ -2,7 +2,11 @@
  const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
  const backdrop=$('#modal-backdrop'), modal=$('.modal');
  let previousFocus=null,guest=false,kind='smb',currentView='grid';
- const visible=e=>!!(e&&e.getClientRects().length&&!e.closest('.hidden')&&!e.disabled);
+ const visible=e=>{
+  if(!e||e.disabled||e.closest('.hidden'))return false;
+  const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+  return r.width>1&&r.height>1&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0;
+ };
  const focusables=()=>{
   const scope=backdrop.classList.contains('hidden')?document:modal;
   return Array.from(scope.querySelectorAll('button,input,[data-focus]')).filter(visible);
@@ -29,17 +33,35 @@
   const items=focusables(),current=document.activeElement;
   if(!items.includes(current)){setFocus(items[0]);return;}
   const a=current.getBoundingClientRect(),ax=a.left+a.width/2,ay=a.top+a.height/2;
+  const toolbar=current.closest('.toolbar');
+  let candidates=items.filter(el=>el!==current);
+  // Toolbar controls are a single deliberate left-to-right navigation row.
+  if(toolbar&&(key==='ArrowLeft'||key==='ArrowRight')){
+   const row=candidates.filter(el=>el.closest('.toolbar'));
+   const sameRow=row.filter(el=>{
+    const r=el.getBoundingClientRect(),cy=r.top+r.height/2;
+    return Math.abs(cy-ay)<Math.max(28,a.height*.8);
+   });
+   const directional=sameRow.filter(el=>{
+    const r=el.getBoundingClientRect(),cx=r.left+r.width/2;
+    return key==='ArrowRight'?cx>ax+2:cx<ax-2;
+   }).sort((x,y)=>{
+    const rx=x.getBoundingClientRect(),ry=y.getBoundingClientRect();
+    return key==='ArrowRight'?rx.left-ry.left:ry.right-rx.right;
+   });
+   if(directional.length){setFocus(directional[0]);return;}
+  }
+  // Grid navigation prefers the nearest item in the same row/column,
+  // so focus advances cell-by-cell instead of jumping diagonally.
   let best=null,bestScore=Infinity;
-  for(const el of items){
-   if(el===current)continue;
+  for(const el of candidates){
    const r=el.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,dx=x-ax,dy=y-ay;
-   let primary,secondary;
-   if(key==='ArrowRight'){if(dx<=3)continue;primary=dx;secondary=Math.abs(dy);}
-   else if(key==='ArrowLeft'){if(dx>=-3)continue;primary=-dx;secondary=Math.abs(dy);}
-   else if(key==='ArrowDown'){if(dy<=3)continue;primary=dy;secondary=Math.abs(dx);}
-   else {if(dy>=-3)continue;primary=-dy;secondary=Math.abs(dx);}
-   // Prefer controls in the same row/column, but still allow diagonal transitions at panel edges.
-   const score=primary+secondary*1.35+(secondary>primary?secondary*.35:0);
+   let primary,secondary,sameAxis;
+   if(key==='ArrowRight'){if(dx<=2)continue;primary=dx;secondary=Math.abs(dy);sameAxis=secondary<Math.max(24,a.height*.45);}
+   else if(key==='ArrowLeft'){if(dx>=-2)continue;primary=-dx;secondary=Math.abs(dy);sameAxis=secondary<Math.max(24,a.height*.45);}
+   else if(key==='ArrowDown'){if(dy<=2)continue;primary=dy;secondary=Math.abs(dx);sameAxis=secondary<Math.max(28,a.width*.45);}
+   else {if(dy>=-2)continue;primary=-dy;secondary=Math.abs(dx);sameAxis=secondary<Math.max(28,a.width*.45);}
+   const score=primary+(sameAxis?secondary*.25:secondary*3.5)+(!sameAxis?primary*.35:0);
    if(score<bestScore){bestScore=score;best=el;}
   }
   if(best)setFocus(best);
@@ -49,14 +71,27 @@
   return ({37:'ArrowLeft',38:'ArrowUp',39:'ArrowRight',40:'ArrowDown'})[e.keyCode]||e.key;
  }
  document.addEventListener('keydown',e=>{
-  const key=keyName(e);
-  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(key)){if(document.activeElement===searchInput)return;e.preventDefault();moveFocus(key);}
-  else if(key==='Enter'||key===' '||e.keyCode===13){if(document.activeElement.tagName==='BUTTON'){e.preventDefault();document.activeElement.click();}}
+  const key=keyName(e),active=document.activeElement,isSearch=active===searchInput;
+  if(isSearch&&key==='ArrowDown'){
+   // Leave the text field with the D-pad; blur also dismisses the TV keyboard.
+   e.preventDefault();e.stopPropagation();searchInput.blur();
+   const first=$('.folder-card:not(.hidden)');if(first)setFocus(first);else setFocus($('#search-toggle'));
+   return;
+  }
+  if(isSearch&&key==='ArrowUp'){
+   e.preventDefault();e.stopPropagation();searchInput.blur();setFocus($('#search-toggle'));return;
+  }
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(key)){
+   e.preventDefault();moveFocus(key);
+  }
+  else if(key==='Enter'||key===' '||e.keyCode===13){
+   if(active.tagName==='BUTTON'){e.preventDefault();active.click();}
+  }
   else if(key==='Escape'||key==='Backspace'||e.keyCode===461||e.keyCode===8){
    if(!backdrop.classList.contains('hidden')){e.preventDefault();closeModal();}
    else if(searchBox.classList.contains('open')){e.preventDefault();closeSearch();}
   }
- });
+ },true);
  // Focus styling is driven exclusively by the real focused element; no tile keeps a stale highlight.
  window.addEventListener('load',()=>setFocus($('.folder-card')));
  document.addEventListener('focusin',e=>{ $$('.folder-card').forEach(c=>c.classList.remove('focused')); });
