@@ -18,10 +18,13 @@
  $('#select-mode').addEventListener('click',e=>{e.currentTarget.textContent=e.currentTarget.textContent==='Select'?'Done':'Select';});
  $('#grid-view').addEventListener('click',()=>setView('grid'));$('#list-view').addEventListener('click',()=>setView('list'));
  function setView(v){currentView=v;$('#folder-grid').classList.toggle('list',v==='list');$('#grid-view').classList.toggle('chosen',v==='grid');$('#list-view').classList.toggle('chosen',v==='list');try{localStorage.setItem('deckfiles-folder-view',v);}catch(_){} }
- $('#search-toggle').addEventListener('click',()=>{const row=$('#search-row');row.classList.toggle('hidden');if(!row.classList.contains('hidden'))setFocus($('#search'));});
- $('#clear-search').addEventListener('click',()=>{$('#search').value='';filter();setFocus($('#search'));});
- $('#search').addEventListener('input',filter);
- function filter(){const q=$('#search').value.toLowerCase();$$('.folder-card').forEach(c=>c.classList.toggle('hidden',!c.textContent.toLowerCase().includes(q)));}
+ const searchBox=$('#search-box'),searchInput=$('#search');
+ function openSearch(){searchBox.classList.add('open');setFocus(searchInput);}
+ function closeSearch(){searchBox.classList.remove('open','has-value');searchInput.value='';filter();setFocus($('#search-toggle'));}
+ $('#search-toggle').addEventListener('click',()=>{if(searchBox.classList.contains('open')){if(searchInput.value){searchInput.value='';filter();searchInput.focus();}else closeSearch();}else openSearch();});
+ $('#clear-search').addEventListener('click',()=>{searchInput.value='';filter();setFocus(searchInput);});
+ searchInput.addEventListener('input',()=>{searchBox.classList.toggle('has-value',!!searchInput.value);filter();});
+ function filter(){const q=searchInput.value.toLowerCase();$('.folder-card').forEach(c=>c.classList.toggle('hidden',!c.textContent.toLowerCase().includes(q)));}
  function moveFocus(key){
   const items=focusables(),current=document.activeElement;
   if(!items.includes(current)){setFocus(items[0]);return;}
@@ -47,11 +50,11 @@
  }
  document.addEventListener('keydown',e=>{
   const key=keyName(e);
-  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(key)){e.preventDefault();moveFocus(key);}
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(key)){if(document.activeElement===searchInput)return;e.preventDefault();moveFocus(key);}
   else if(key==='Enter'||key===' '||e.keyCode===13){if(document.activeElement.tagName==='BUTTON'){e.preventDefault();document.activeElement.click();}}
   else if(key==='Escape'||key==='Backspace'||e.keyCode===461||e.keyCode===8){
    if(!backdrop.classList.contains('hidden')){e.preventDefault();closeModal();}
-   else if(!$('#search-row').classList.contains('hidden')){$('#search-row').classList.add('hidden');$('#search').value='';filter();setFocus($('#search-toggle'));}
+   else if(searchBox.classList.contains('open')){e.preventDefault();closeSearch();}
   }
  });
  // Focus styling is driven exclusively by the real focused element; no tile keeps a stale highlight.
