@@ -1,7 +1,7 @@
 (() => {
  const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
  const backdrop=$('#modal-backdrop'), modal=$('.modal'); let previousFocus=null, guest=false, kind='smb';
- const focusables=()=>$$('button:not(:disabled),input:not(:disabled),[data-focus]').filter(e=>!e.closest('.hidden')&&!e.closest('.backdrop.hidden'));
+ const focusables=()=>{const scope=backdrop.classList.contains('hidden')?document:modal;return Array.from(scope.querySelectorAll('button:not(:disabled),input:not(:disabled),[data-focus]')).filter(e=>!e.closest('.hidden'));};
  function openModal(){previousFocus=document.activeElement;backdrop.classList.remove('hidden');setKind('smb');const first=$('.module-tab');first.focus();}
  function closeModal(){backdrop.classList.add('hidden');if(previousFocus&&previousFocus.focus)previousFocus.focus();}
  function setKind(next){kind=next;$$('.module-tab').forEach(b=>b.classList.toggle('selected',b.dataset.kind===kind));$('#smb-fields').classList.toggle('hidden',kind!=='smb');$('#local-fields').classList.toggle('hidden',kind!=='local');$('#gdrive-fields').classList.toggle('hidden',kind!=='gdrive');}
@@ -28,8 +28,6 @@
  }if(best)best.focus();}
  document.addEventListener('keydown',e=>{
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
-   // Let the TV/browser keyboard handle directional caret movement only while editing a text field.
-   if(document.activeElement.matches('input,textarea'))return;
    e.preventDefault();moveFocus(e.key);
   } else if(e.key==='Enter'||e.key===' '){if(document.activeElement.tagName==='BUTTON'){e.preventDefault();document.activeElement.click();}}
   else if(e.key==='Escape'||e.key==='Backspace'){if(!backdrop.classList.contains('hidden')){e.preventDefault();closeModal();}else if(!$('#search-row').classList.contains('hidden')){$('#search-row').classList.add('hidden');$('#search').value='';filter();}}
