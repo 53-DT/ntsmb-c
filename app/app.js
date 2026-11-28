@@ -17,7 +17,7 @@
  $('#search').addEventListener('input',filter);
  function filter(){const q=$('#search').value.toLowerCase();$$('.folder-card').forEach(c=>c.classList.toggle('hidden',!c.textContent.toLowerCase().includes(q)));}
  // Spatial D-pad navigation: choose the nearest visible control in the requested direction.
- function moveFocus(key){const items=focusables().filter(e=>e.getClientRects().length);const current=document.activeElement;if(!items.includes(current)){(items[0]||document.body).focus?.();return;}
+ function moveFocus(key){const items=focusables().filter(e=>e.getClientRects().length);const current=document.activeElement;if(!items.includes(current)){const first=items[0]||document.body;if(typeof first.focus==='function')first.focus();return;}
  const a=current.getBoundingClientRect(), ax=a.left+a.width/2, ay=a.top+a.height/2;let best=null,bestScore=Infinity;
  for(const el of items){if(el===current)continue;const r=el.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,dx=x-ax,dy=y-ay;let primary,secondary;
  if(key==='ArrowRight'){if(dx<=4)continue;primary=dx;secondary=Math.abs(dy);}
